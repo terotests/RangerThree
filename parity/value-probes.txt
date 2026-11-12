@@ -1,0 +1,944 @@
+# Value probes: one item each. The golden is what three.js r185 answers
+# (tools/gen-goldens.mjs), the meter runs the same probe on the .tsx kit's
+# THREE in CErXes (run.mjs). Forms:
+#
+#   Class.method TOKEN TOKEN ...   R.Class() receives method(P.TOKEN(), ...);
+#                                  the answer is [result, receiver after]
+#   Class.member = <js expression> anything else (an expression's value)
+#
+# Tokens are probe-prelude.js's P.*; a token with a ':' is a literal
+# (n:2, s:XZY, b:true). Lines starting with # are notes.
+
+# ---- Vector2 -------------------------------------------------------------
+Vector2.new = new THREE.Vector2(3, 4)
+Vector2.width = R.Vector2().width
+Vector2.height = R.Vector2().height
+Vector2.set n:3 n:-4
+Vector2.setScalar N
+Vector2.setX N
+Vector2.setY N
+Vector2.setComponent n:1 N2
+Vector2.getComponent n:1
+Vector2.clone
+Vector2.copy V2b
+Vector2.add V2b
+Vector2.addScalar N
+Vector2.addVectors V2b V2c
+Vector2.addScaledVector V2b N
+Vector2.sub V2b
+Vector2.subScalar N
+Vector2.subVectors V2b V2c
+Vector2.multiply V2b
+Vector2.multiplyScalar N2
+Vector2.divide V2b
+Vector2.divideScalar N2
+Vector2.applyMatrix3 M3
+Vector2.min V2c
+Vector2.max V2c
+Vector2.clamp V2c V2b
+Vector2.clampScalar n:-1 n:0.25
+Vector2.clampLength n:0.5 n:1
+Vector2.floor
+Vector2.ceil
+Vector2.round
+Vector2.roundToZero
+Vector2.negate
+Vector2.dot V2b
+Vector2.cross V2b
+Vector2.lengthSq
+Vector2.length
+Vector2.manhattanLength
+Vector2.normalize
+Vector2.angle
+Vector2.angleTo V2b
+Vector2.distanceTo V2b
+Vector2.distanceToSquared V2b
+Vector2.manhattanDistanceTo V2b
+Vector2.setLength N2
+Vector2.lerp V2b N
+Vector2.lerpVectors V2b V2c N
+Vector2.equals V2
+Vector2.fromArray ARR n:2
+Vector2.toArray
+Vector2.fromBufferAttribute ATTR2 n:2
+Vector2.rotateAround V2b N
+Vector2.random = (function () { var v = new THREE.Vector2().random(); return v.x >= 0 && v.x < 1 && v.y >= 0 && v.y < 1; })()
+Vector2.isVector2 = R.Vector2().isVector2
+Vector2.iterator = (function () { var a = []; for (var c of R.Vector2()) a.push(c); return a; })()
+
+# ---- Vector3 -------------------------------------------------------------
+Vector3.new = new THREE.Vector3(1, 2, 3)
+Vector3.newDefault = new THREE.Vector3()
+Vector3.set n:3 n:-4 n:5
+Vector3.setScalar N
+Vector3.setX N
+Vector3.setY N
+Vector3.setZ N
+Vector3.setComponent n:2 N2
+Vector3.getComponent n:2
+Vector3.clone
+Vector3.copy V3b
+Vector3.add V3b
+Vector3.addScalar N
+Vector3.addVectors V3b V3c
+Vector3.addScaledVector V3b N
+Vector3.sub V3b
+Vector3.subScalar N
+Vector3.subVectors V3b V3c
+Vector3.multiply V3b
+Vector3.multiplyScalar N2
+Vector3.multiplyVectors V3b V3c
+Vector3.applyEuler E
+Vector3.applyAxisAngle V3n N
+Vector3.applyMatrix3 M3
+Vector3.applyNormalMatrix M3
+Vector3.applyMatrix4 M4
+Vector3.applyQuaternion Q
+Vector3.project CAM
+Vector3.unproject CAM
+Vector3.transformDirection M4
+Vector3.divide V3b
+Vector3.divideScalar N2
+Vector3.min V3c
+Vector3.max V3c
+Vector3.clamp V3c V3b
+Vector3.clampScalar n:-1 n:0.25
+Vector3.clampLength n:0.5 n:1
+Vector3.floor
+Vector3.ceil
+Vector3.round
+Vector3.roundToZero
+Vector3.negate
+Vector3.dot V3b
+Vector3.lengthSq
+Vector3.length
+Vector3.manhattanLength
+Vector3.normalize
+Vector3.setLength N2
+Vector3.lerp V3b N
+Vector3.lerpVectors V3b V3c N
+Vector3.cross V3b
+Vector3.crossVectors V3b V3c
+Vector3.projectOnVector V3b
+Vector3.projectOnPlane V3n
+Vector3.reflect V3n
+Vector3.angleTo V3b
+Vector3.distanceTo V3b
+Vector3.distanceToSquared V3b
+Vector3.manhattanDistanceTo V3b
+Vector3.setFromSpherical SPL
+Vector3.setFromSphericalCoords n:2 n:0.8 n:1.3
+Vector3.setFromCylindrical CYL
+Vector3.setFromCylindricalCoords n:2 n:0.6 n:1.5
+Vector3.setFromMatrixPosition M4
+Vector3.setFromMatrixScale M4
+Vector3.setFromMatrixColumn M4 n:1
+Vector3.setFromMatrix3Column M3 n:2
+Vector3.setFromEuler E
+Vector3.setFromColor C
+Vector3.equals V3
+Vector3.fromArray ARR n:1
+Vector3.toArray
+Vector3.fromBufferAttribute ATTR n:2
+Vector3.random = (function () { var v = new THREE.Vector3().random(); return v.x >= 0 && v.x < 1 && v.z >= 0 && v.z < 1; })()
+Vector3.randomDirection = Math.abs(new THREE.Vector3().randomDirection().length() - 1) < 1e-9
+Vector3.isVector3 = R.Vector3().isVector3
+Vector3.iterator = (function () { var a = []; for (var c of R.Vector3()) a.push(c); return a; })()
+Vector3.chain = new THREE.Vector3(1, 2, 3).applyMatrix4(P.M4()).normalize().multiplyScalar(2).add(P.V3b()).length()
+
+# ---- Vector4 -------------------------------------------------------------
+Vector4.new = new THREE.Vector4(1, 2, 3, 4)
+Vector4.width = R.Vector4().width
+Vector4.height = R.Vector4().height
+Vector4.set n:1 n:2 n:3 n:4
+Vector4.setScalar N
+Vector4.setX N
+Vector4.setY N
+Vector4.setZ N
+Vector4.setW N
+Vector4.setComponent n:3 N2
+Vector4.getComponent n:3
+Vector4.clone
+Vector4.copy V4b
+Vector4.add V4b
+Vector4.addScalar N
+Vector4.addVectors V4b V4
+Vector4.addScaledVector V4b N
+Vector4.sub V4b
+Vector4.subScalar N
+Vector4.subVectors V4b V4
+Vector4.multiply V4b
+Vector4.multiplyScalar N2
+Vector4.applyMatrix4 M4
+Vector4.divide V4b
+Vector4.divideScalar N2
+Vector4.setAxisAngleFromQuaternion Q
+Vector4.setAxisAngleFromRotationMatrix M4
+Vector4.setFromMatrixPosition M4
+Vector4.min V4b
+Vector4.max V4b
+Vector4.clamp V4b V4
+Vector4.clampScalar n:-1 n:0.25
+Vector4.clampLength n:0.5 n:1
+Vector4.floor
+Vector4.ceil
+Vector4.round
+Vector4.roundToZero
+Vector4.negate
+Vector4.dot V4b
+Vector4.lengthSq
+Vector4.length
+Vector4.manhattanLength
+Vector4.normalize
+Vector4.setLength N2
+Vector4.lerp V4b N
+Vector4.lerpVectors V4b V4 N
+Vector4.equals V4
+Vector4.fromArray ARR n:2
+Vector4.toArray
+Vector4.fromBufferAttribute ATTR4 n:1
+Vector4.isVector4 = R.Vector4().isVector4
+
+# ---- Matrix3 -------------------------------------------------------------
+Matrix3.new = new THREE.Matrix3()
+Matrix3.set n:1 n:2 n:3 n:4 n:5 n:6 n:7 n:8 n:10
+Matrix3.identity
+Matrix3.copy M3b
+Matrix3.extractBasis V3 V3b V3c
+Matrix3.setFromMatrix4 M4
+Matrix3.multiply M3b
+Matrix3.premultiply M3b
+Matrix3.multiplyMatrices M3b M3
+Matrix3.multiplyScalar N2
+Matrix3.determinant
+Matrix3.invert
+Matrix3.transpose
+Matrix3.getNormalMatrix M4
+Matrix3.transposeIntoArray ARR
+Matrix3.setUvTransform n:0.1 n:0.2 n:2 n:3 n:0.5 n:0.5 n:0.5
+Matrix3.scale n:2 n:3
+Matrix3.rotate N
+Matrix3.translate n:1 n:-2
+Matrix3.makeTranslation n:1 n:-2
+Matrix3.makeRotation N
+Matrix3.makeScale n:2 n:3
+Matrix3.equals M3
+Matrix3.fromArray ARR n:1
+Matrix3.toArray
+Matrix3.clone
+Matrix3.isMatrix3 = R.Matrix3().isMatrix3
+
+# ---- Matrix4 -------------------------------------------------------------
+Matrix4.new = new THREE.Matrix4()
+Matrix4.set n:1 n:2 n:3 n:4 n:5 n:6 n:7 n:8 n:9 n:10 n:11 n:12 n:13 n:14 n:15 n:17
+Matrix4.identity
+Matrix4.clone
+Matrix4.copy M4b
+Matrix4.copyPosition M4b
+Matrix4.setFromMatrix3 M3
+Matrix4.extractBasis V3 V3b V3c
+Matrix4.makeBasis V3 V3b V3c
+Matrix4.extractRotation M4b
+Matrix4.makeRotationFromEuler E
+Matrix4.makeRotationFromEulerYXZ Eb
+Matrix4.makeRotationFromQuaternion Q
+Matrix4.lookAt V3 V3b V3n
+Matrix4.multiply M4b
+Matrix4.premultiply M4b
+Matrix4.multiplyMatrices M4b M4
+Matrix4.multiplyScalar N2
+Matrix4.determinant
+Matrix4.determinantAffine = typeof R.Matrix4().determinantAffine === 'function' ? R.Matrix4().determinantAffine() : '<none>'
+Matrix4.transpose
+Matrix4.setPosition V3
+Matrix4.invert
+Matrix4.scale V3
+Matrix4.getMaxScaleOnAxis
+Matrix4.makeTranslation n:1 n:2 n:3
+Matrix4.makeRotationX N
+Matrix4.makeRotationY N
+Matrix4.makeRotationZ N
+Matrix4.makeRotationAxis V3n N
+Matrix4.makeScale n:2 n:3 n:4
+Matrix4.makeShear n:0.1 n:0.2 n:0.3 n:0.4 n:0.5 n:0.6
+Matrix4.compose V3 Q V3b
+Matrix4.decompose = (function () { var p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3(); R.Matrix4().decompose(p, q, s); return [p, q, s]; })()
+Matrix4.makePerspective n:-0.4 n:0.4 n:0.3 n:-0.3 n:0.5 n:50
+Matrix4.makeOrthographic n:-4 n:4 n:3 n:-3 n:0.1 n:50
+Matrix4.equals M4
+Matrix4.fromArray ARR
+Matrix4.toArray
+Matrix4.isMatrix4 = R.Matrix4().isMatrix4
+
+# ---- Quaternion ----------------------------------------------------------
+Quaternion.new = new THREE.Quaternion(0.1, 0.2, 0.3, 0.9)
+Quaternion.xyzw = (function () { var q = R.Quaternion(); q.x = 0.5; return [q.x, q.y, q.z, q.w]; })()
+Quaternion.set n:0.1 n:0.2 n:0.3 n:0.9
+Quaternion.clone
+Quaternion.copy Qb
+Quaternion.setFromEuler E
+Quaternion.setFromEulerYXZ Eb
+Quaternion.setFromAxisAngle V3n N
+Quaternion.setFromRotationMatrix M4
+Quaternion.setFromUnitVectors = R.Quaternion().setFromUnitVectors(P.V3n(), P.V3b().normalize())
+Quaternion.angleTo Qb
+Quaternion.rotateTowards Qb N
+Quaternion.identity
+Quaternion.invert
+Quaternion.conjugate
+Quaternion.dot Qb
+Quaternion.lengthSq
+Quaternion.length
+Quaternion.normalize
+Quaternion.multiply Qb
+Quaternion.premultiply Qb
+Quaternion.multiplyQuaternions Qb Q
+Quaternion.slerp Qb N
+Quaternion.slerpQuaternions Qb Q N
+Quaternion.slerpFlat = (function () { var d = [0, 0, 0, 0]; var a = P.Q(), b = P.Qb(); THREE.Quaternion.slerpFlat(d, 0, a.toArray(), 0, b.toArray(), 0, 0.3); return d; })()
+Quaternion.random = Math.abs(new THREE.Quaternion().random().length() - 1) < 1e-9
+Quaternion.equals Q
+Quaternion.fromArray ARR n:1
+Quaternion.toArray
+Quaternion.fromBufferAttribute ATTR4 n:1
+Quaternion.toJSON
+Quaternion.onChange = (function () { var n = 0, q = new THREE.Quaternion(); q._onChange(function () { n++; }); q.set(0, 0, 0, 1); q.x = 0.5; return n; })()
+
+# ---- Euler ---------------------------------------------------------------
+Euler.new = new THREE.Euler(0.1, 0.2, 0.3, 'ZYX')
+Euler.xyzo = (function () { var e = R.Euler(); e.order = 'ZXY'; e.y = 0.9; return [e.x, e.y, e.z, e.order]; })()
+Euler.set n:0.1 n:0.2 n:0.3 s:YZX
+Euler.clone
+Euler.copy Eb
+Euler.setFromRotationMatrix M4
+Euler.setFromRotationMatrixZYX M4 s:ZYX
+Euler.setFromQuaternion Q
+Euler.setFromQuaternionYXZ Q s:YXZ
+Euler.setFromVector3 V3
+Euler.reorder s:ZXY
+Euler.equals E
+Euler.fromArray = new THREE.Euler().fromArray([0.1, 0.2, 0.3, 'YXZ'])
+Euler.toArray
+Euler.DEFAULT_ORDER = THREE.Euler.DEFAULT_ORDER
+
+# ---- Color ---------------------------------------------------------------
+Color.newHex = new THREE.Color(0xff8800)
+Color.newStyle = new THREE.Color('rgb(255, 128, 0)')
+Color.newName = new THREE.Color('skyblue')
+Color.newRGB = new THREE.Color(0.2, 0.4, 0.6)
+Color.set s:#4080ff
+Color.setNumber = R.Color().set(0x123456)
+Color.setScalar N
+Color.setHex = R.Color().setHex(0x40a0ff)
+Color.setRGB n:0.2 n:0.4 n:0.6
+Color.setHSL n:0.6 n:0.5 n:0.4
+Color.setStyle s:hsl(120,50%,50%)
+Color.setStyleHex3 s:#f80
+Color.setStyleRgba s:rgba(10,20,30,0.5)
+Color.setColorName s:tomato
+Color.clone
+Color.copy Cb
+Color.copySRGBToLinear Cb
+Color.copyLinearToSRGB Cb
+Color.convertSRGBToLinear
+Color.convertLinearToSRGB
+Color.getHex
+Color.getHexString
+Color.getHSL = R.Color().getHSL({ h: 0, s: 0, l: 0 })
+Color.getRGB = R.Color().getRGB(new THREE.Color())
+Color.getStyle
+Color.offsetHSL n:0.1 n:0.1 n:-0.1
+Color.add Cb
+Color.addColors Cb C
+Color.addScalar N
+Color.sub Cb
+Color.multiply Cb
+Color.multiplyScalar N2
+Color.lerp Cb N
+Color.lerpColors Cb C N
+Color.lerpHSL Cb N
+Color.setFromVector3 V3b
+Color.applyMatrix3 M3
+Color.equals C
+Color.fromArray ARR n:1
+Color.toArray
+Color.fromBufferAttribute ATTR n:1
+Color.toJSON
+Color.NAMES = THREE.Color.NAMES && THREE.Color.NAMES.coral
+Color.managementLinear = (function () { var c = new THREE.Color(0x808080); return [c.r, c.g, c.b, c.getHex()]; })()
+
+# ---- Box2 ----------------------------------------------------------------
+Box2.new = new THREE.Box2()
+Box2.set = new THREE.Box2().set(new THREE.Vector2(1, 2), new THREE.Vector2(3, 4))
+Box2.setFromPoints = new THREE.Box2().setFromPoints([P.V2(), P.V2b(), P.V2c()])
+Box2.setFromCenterAndSize V2 V2b
+Box2.clone
+Box2.copy B2b
+Box2.makeEmpty
+Box2.isEmpty
+Box2.getCenter = R.Box2().getCenter(new THREE.Vector2())
+Box2.getSize = R.Box2().getSize(new THREE.Vector2())
+Box2.expandByPoint V2c
+Box2.expandByVector V2b
+Box2.expandByScalar N
+Box2.containsPoint V2
+Box2.containsBox B2b
+Box2.getParameter = R.Box2().getParameter(P.V2(), new THREE.Vector2())
+Box2.intersectsBox B2b
+Box2.clampPoint = R.Box2().clampPoint(P.V2c(), new THREE.Vector2())
+Box2.distanceToPoint V2c
+Box2.intersect B2b
+Box2.union B2b
+Box2.translate V2b
+Box2.equals B2
+
+# ---- Box3 ----------------------------------------------------------------
+Box3.new = new THREE.Box3()
+Box3.set = new THREE.Box3().set(P.V3b(), P.V3())
+Box3.setFromArray = new THREE.Box3().setFromArray(P.ARR())
+Box3.setFromBufferAttribute = new THREE.Box3().setFromBufferAttribute(P.ATTR())
+Box3.setFromPoints = new THREE.Box3().setFromPoints([P.V3(), P.V3b(), P.V3c()])
+Box3.setFromCenterAndSize V3 V3b
+Box3.setFromObject = new THREE.Box3().setFromObject(P.MESH())
+Box3.setFromObjectPrecise = new THREE.Box3().setFromObject(P.MESH(), true)
+Box3.clone
+Box3.copy B3b
+Box3.makeEmpty
+Box3.isEmpty
+Box3.getCenter = R.Box3().getCenter(new THREE.Vector3())
+Box3.getSize = R.Box3().getSize(new THREE.Vector3())
+Box3.expandByPoint V3c
+Box3.expandByVector V3b
+Box3.expandByScalar N
+Box3.expandByObject MESH
+Box3.containsPoint V3b
+Box3.containsBox B3b
+Box3.getParameter = R.Box3().getParameter(P.V3b(), new THREE.Vector3())
+Box3.intersectsBox B3b
+Box3.intersectsSphere SPHb
+Box3.intersectsPlane PL
+Box3.intersectsTriangle TRI
+Box3.clampPoint = R.Box3().clampPoint(P.V3c(), new THREE.Vector3())
+Box3.distanceToPoint V3c
+Box3.getBoundingSphere = R.Box3().getBoundingSphere(new THREE.Sphere())
+Box3.intersect B3b
+Box3.union B3b
+Box3.applyMatrix4 M4
+Box3.translate V3b
+Box3.equals B3
+Box3.toJSON
+Box3.fromJSON = new THREE.Box3().fromJSON(R.Box3().toJSON())
+
+# ---- Sphere --------------------------------------------------------------
+Sphere.new = new THREE.Sphere()
+Sphere.set = new THREE.Sphere().set(P.V3(), 3)
+Sphere.setFromPoints = new THREE.Sphere().setFromPoints([P.V3(), P.V3b(), P.V3c()])
+Sphere.setFromPointsCenter = new THREE.Sphere().setFromPoints([P.V3(), P.V3b(), P.V3c()], new THREE.Vector3(0, 0, 0))
+Sphere.copy SPHb
+Sphere.isEmpty
+Sphere.makeEmpty
+Sphere.containsPoint V3b
+Sphere.distanceToPoint V3c
+Sphere.intersectsSphere SPHb
+Sphere.intersectsBox B3b
+Sphere.intersectsPlane PL
+Sphere.clampPoint = R.Sphere().clampPoint(P.V3c(), new THREE.Vector3())
+Sphere.getBoundingBox = R.Sphere().getBoundingBox(new THREE.Box3())
+Sphere.applyMatrix4 M4
+Sphere.translate V3b
+Sphere.expandByPoint V3c
+Sphere.union SPHb
+Sphere.equals SPH
+Sphere.clone
+Sphere.toJSON
+Sphere.fromJSON = new THREE.Sphere().fromJSON(R.Sphere().toJSON())
+
+# ---- Plane ---------------------------------------------------------------
+Plane.new = new THREE.Plane()
+Plane.set V3n N
+Plane.setComponents n:1 n:2 n:3 n:4
+Plane.setFromNormalAndCoplanarPoint V3n V3
+Plane.setFromCoplanarPoints V3 V3b V3c
+Plane.copy PLb
+Plane.normalize = new THREE.Plane(new THREE.Vector3(0, 2, 0), 4).normalize()
+Plane.negate
+Plane.distanceToPoint V3
+Plane.distanceToSphere SPH
+Plane.projectPoint = R.Plane().projectPoint(P.V3(), new THREE.Vector3())
+Plane.intersectLine = R.Plane().intersectLine(P.L3b(), new THREE.Vector3())
+Plane.intersectsLine L3b
+Plane.intersectsBox B3
+Plane.intersectsSphere SPH
+Plane.coplanarPoint = R.Plane().coplanarPoint(new THREE.Vector3())
+Plane.applyMatrix4 M4
+Plane.translate V3b
+Plane.equals PL
+Plane.clone
+
+# ---- Ray -----------------------------------------------------------------
+Ray.new = new THREE.Ray()
+Ray.set = new THREE.Ray().set(P.V3(), P.V3n())
+Ray.copy = new THREE.Ray().copy(R.Ray())
+Ray.at = R.Ray().at(3, new THREE.Vector3())
+Ray.lookAt V3c
+Ray.recast N2
+Ray.closestPointToPoint = R.Ray().closestPointToPoint(P.V3c(), new THREE.Vector3())
+Ray.distanceToPoint V3c
+Ray.distanceSqToPoint V3c
+Ray.distanceSqToSegment V3b V3c
+Ray.intersectSphere = R.Ray().intersectSphere(P.SPH(), new THREE.Vector3())
+Ray.intersectsSphere SPH
+Ray.distanceToPlane PLb
+Ray.intersectPlane = R.Ray().intersectPlane(P.PLb(), new THREE.Vector3())
+Ray.intersectsPlane PLb
+Ray.intersectBox = R.Ray().intersectBox(P.B3(), new THREE.Vector3())
+Ray.intersectsBox B3
+Ray.intersectTriangle = new THREE.Ray(new THREE.Vector3(0.5, 0.5, 5), new THREE.Vector3(0, 0, -1)).intersectTriangle(P.TRI().a, P.TRI().b, P.TRI().c, false, new THREE.Vector3())
+Ray.applyMatrix4 M4
+Ray.equals RAY
+Ray.clone
+
+# ---- Line3 ---------------------------------------------------------------
+Line3.new = new THREE.Line3()
+Line3.set V3 V3b
+Line3.copy L3b
+Line3.getCenter = R.Line3().getCenter(new THREE.Vector3())
+Line3.delta = R.Line3().delta(new THREE.Vector3())
+Line3.distanceSq
+Line3.distance
+Line3.at = R.Line3().at(0.3, new THREE.Vector3())
+Line3.closestPointToPointParameter V3c b:true
+Line3.closestPointToPoint = R.Line3().closestPointToPoint(P.V3c(), true, new THREE.Vector3())
+Line3.distanceSqToLine3 = typeof R.Line3().distanceSqToLine3 === 'function' ? R.Line3().distanceSqToLine3(P.L3b()) : '<none>'
+Line3.applyMatrix4 M4
+Line3.equals L3
+Line3.clone
+
+# ---- Triangle ------------------------------------------------------------
+Triangle.new = new THREE.Triangle()
+Triangle.set V3 V3b V3c
+Triangle.setFromPointsAndIndices = new THREE.Triangle().setFromPointsAndIndices([P.V3(), P.V3b(), P.V3c()], 2, 0, 1)
+Triangle.setFromAttributeAndIndices = new THREE.Triangle().setFromAttributeAndIndices(P.ATTR(), 0, 1, 3)
+Triangle.clone
+Triangle.copy = new THREE.Triangle().copy(R.Triangle())
+Triangle.getArea
+Triangle.getMidpoint = R.Triangle().getMidpoint(new THREE.Vector3())
+Triangle.getNormal = R.Triangle().getNormal(new THREE.Vector3())
+Triangle.getPlane = R.Triangle().getPlane(new THREE.Plane())
+Triangle.getBarycoord = R.Triangle().getBarycoord(new THREE.Vector3(0.5, 0.5, 0.1), new THREE.Vector3())
+Triangle.getInterpolation = R.Triangle().getInterpolation(new THREE.Vector3(0.5, 0.5, 0.1), new THREE.Vector2(0, 0), new THREE.Vector2(1, 0), new THREE.Vector2(0, 1), new THREE.Vector2())
+Triangle.containsPoint V3b
+Triangle.isFrontFacing V3n
+Triangle.intersectsBox B3
+Triangle.closestPointToPoint = R.Triangle().closestPointToPoint(P.V3c(), new THREE.Vector3())
+Triangle.equals TRI
+Triangle.staticGetNormal = THREE.Triangle.getNormal(P.V3(), P.V3b(), P.V3c(), new THREE.Vector3())
+
+# ---- Spherical / Cylindrical ---------------------------------------------
+Spherical.new = new THREE.Spherical()
+Spherical.set n:3 n:0.5 n:1
+Spherical.copy = new THREE.Spherical().copy(R.Spherical())
+Spherical.makeSafe = new THREE.Spherical(1, 0, 0).makeSafe()
+Spherical.setFromVector3 V3
+Spherical.setFromCartesianCoords n:1 n:2 n:3
+Spherical.clone
+Cylindrical.new = new THREE.Cylindrical()
+Cylindrical.set n:3 n:0.5 n:1
+Cylindrical.copy = new THREE.Cylindrical().copy(R.Cylindrical())
+Cylindrical.setFromVector3 V3
+Cylindrical.setFromCartesianCoords n:1 n:2 n:3
+Cylindrical.clone
+
+# ---- Frustum -------------------------------------------------------------
+Frustum.setFromProjectionMatrix = R.Frustum()
+Frustum.set = new THREE.Frustum().set(P.PL(), P.PLb(), P.PL(), P.PLb(), P.PL(), P.PLb())
+Frustum.copy = new THREE.Frustum().copy(R.Frustum())
+Frustum.containsPoint V3
+Frustum.containsOrigin = R.Frustum().containsPoint(new THREE.Vector3(0, 0, 0))
+Frustum.intersectsSphere SPH
+Frustum.intersectsBox B3
+Frustum.intersectsObject MESH
+Frustum.intersectsSprite = R.Frustum().intersectsSprite(new THREE.Sprite())
+Frustum.clone
+
+# ---- MathUtils -----------------------------------------------------------
+MathUtils.DEG2RAD = THREE.MathUtils.DEG2RAD
+MathUtils.RAD2DEG = THREE.MathUtils.RAD2DEG
+MathUtils.generateUUID = /^[0-9A-F]{8}-[0-9A-F]{4}-4[0-9A-F]{3}-[89AB][0-9A-F]{3}-[0-9A-F]{12}$/i.test(THREE.MathUtils.generateUUID())
+MathUtils.clamp = [THREE.MathUtils.clamp(5, 0, 3), THREE.MathUtils.clamp(-1, 0, 3), THREE.MathUtils.clamp(1.5, 0, 3)]
+MathUtils.euclideanModulo = [THREE.MathUtils.euclideanModulo(-7, 3), THREE.MathUtils.euclideanModulo(7.5, 2)]
+MathUtils.mapLinear = THREE.MathUtils.mapLinear(5, 0, 10, -1, 1)
+MathUtils.inverseLerp = [THREE.MathUtils.inverseLerp(2, 6, 3), THREE.MathUtils.inverseLerp(2, 2, 3)]
+MathUtils.lerp = THREE.MathUtils.lerp(2, 6, 0.25)
+MathUtils.damp = THREE.MathUtils.damp(0, 10, 4, 0.1)
+MathUtils.pingpong = [THREE.MathUtils.pingpong(2.5, 2), THREE.MathUtils.pingpong(3.5)]
+MathUtils.smoothstep = [THREE.MathUtils.smoothstep(0.3, 0, 1), THREE.MathUtils.smoothstep(-1, 0, 1)]
+MathUtils.smootherstep = THREE.MathUtils.smootherstep(0.3, 0, 1)
+MathUtils.randInt = (function () { var v = THREE.MathUtils.randInt(2, 5); return v >= 2 && v <= 5 && v === Math.floor(v); })()
+MathUtils.randFloat = (function () { var v = THREE.MathUtils.randFloat(2, 5); return v >= 2 && v < 5; })()
+MathUtils.randFloatSpread = (function () { var v = THREE.MathUtils.randFloatSpread(4); return v >= -2 && v < 2; })()
+MathUtils.seededRandom = [THREE.MathUtils.seededRandom(42), THREE.MathUtils.seededRandom()]
+MathUtils.degToRad = THREE.MathUtils.degToRad(90)
+MathUtils.radToDeg = THREE.MathUtils.radToDeg(1)
+MathUtils.isPowerOfTwo = [THREE.MathUtils.isPowerOfTwo(64), THREE.MathUtils.isPowerOfTwo(65)]
+MathUtils.ceilPowerOfTwo = THREE.MathUtils.ceilPowerOfTwo(65)
+MathUtils.floorPowerOfTwo = THREE.MathUtils.floorPowerOfTwo(65)
+MathUtils.setQuaternionFromProperEuler = (function () { var q = new THREE.Quaternion(); THREE.MathUtils.setQuaternionFromProperEuler(q, 0.3, 0.5, 0.7, 'XYX'); return q; })()
+MathUtils.normalize = [THREE.MathUtils.normalize(0.5, new Int8Array(1)), THREE.MathUtils.normalize(0.5, new Uint16Array(1))]
+MathUtils.denormalize = [THREE.MathUtils.denormalize(64, new Int8Array(1)), THREE.MathUtils.denormalize(32768, new Uint16Array(1))]
+
+# ---- Object3D ------------------------------------------------------------
+Object3D.new = new THREE.Object3D()
+Object3D.defaults = (function () { var o = new THREE.Object3D(); return [o.type, o.visible, o.castShadow, o.receiveShadow, o.frustumCulled, o.renderOrder, o.matrixAutoUpdate, o.up, o.layers.mask, o.parent, o.children.length]; })()
+Object3D.id = (function () { var a = new THREE.Object3D(), b = new THREE.Object3D(); return b.id - a.id; })()
+Object3D.uuid = /^[0-9a-f-]{36}$/i.test(new THREE.Object3D().uuid)
+Object3D.rotationQuaternionLink = (function () { var o = new THREE.Object3D(); o.rotation.set(0.3, 0.2, 0.1); var q1 = o.quaternion.clone(); o.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.5); return [q1, o.rotation]; })()
+Object3D.applyMatrix4 M4
+Object3D.applyQuaternion Q
+Object3D.setRotationFromAxisAngle V3n N
+Object3D.setRotationFromEuler E
+Object3D.setRotationFromMatrix M4
+Object3D.setRotationFromQuaternion Q
+Object3D.rotateOnAxis V3n N
+Object3D.rotateOnWorldAxis V3n N
+Object3D.rotateX N
+Object3D.rotateY N
+Object3D.rotateZ N
+Object3D.translateOnAxis V3n N2
+Object3D.translateX N2
+Object3D.translateY N2
+Object3D.translateZ N2
+Object3D.localToWorld = (function () { var o = R.Object3D(); return o.children[0].children[0].localToWorld(new THREE.Vector3(1, 0, 0)); })()
+Object3D.worldToLocal = (function () { var o = R.Object3D(); return o.children[0].worldToLocal(new THREE.Vector3(1, 2, 3)); })()
+Object3D.lookAt V3c
+Object3D.lookAtXYZ n:1 n:-2 n:3
+Object3D.add = (function () { var o = new THREE.Object3D(), c = new THREE.Object3D(); o.add(c); return [o.children.length, c.parent === o]; })()
+Object3D.addMany = (function () { var o = new THREE.Object3D(); o.add(new THREE.Object3D(), new THREE.Object3D(), new THREE.Object3D()); return o.children.length; })()
+Object3D.addReparent = (function () { var a = new THREE.Object3D(), b = new THREE.Object3D(), c = new THREE.Object3D(); a.add(c); b.add(c); return [a.children.length, b.children.length, c.parent === b]; })()
+Object3D.remove = (function () { var o = R.Object3D(); var c = o.children[0]; o.remove(c); return [o.children.length, c.parent]; })()
+Object3D.removeFromParent = (function () { var o = R.Object3D(); var c = o.children[0]; c.removeFromParent(); return [o.children.length, c.parent]; })()
+Object3D.clear = (function () { var o = R.Object3D(); o.clear(); return o.children.length; })()
+Object3D.attach = (function () { var o = R.Object3D(); var g = o.children[0].children[0]; var w = g.getWorldPosition(new THREE.Vector3()); o.attach(g); return [g.parent === o, g.getWorldPosition(new THREE.Vector3()), w]; })()
+Object3D.getObjectById = (function () { var o = R.Object3D(); var g = o.children[0].children[0]; return o.getObjectById(g.id) === g; })()
+Object3D.getObjectByName = R.Object3D().getObjectByName('grand')
+Object3D.getObjectByProperty = R.Object3D().getObjectByProperty('name', 'child')
+Object3D.getObjectsByProperty = R.Object3D().getObjectsByProperty('type', 'Object3D').length
+Object3D.getWorldPosition = R.Object3D().children[0].children[0].getWorldPosition(new THREE.Vector3())
+Object3D.getWorldQuaternion = R.Object3D().children[0].children[0].getWorldQuaternion(new THREE.Quaternion())
+Object3D.getWorldScale = R.Object3D().children[0].getWorldScale(new THREE.Vector3())
+Object3D.getWorldDirection = R.Object3D().children[0].getWorldDirection(new THREE.Vector3())
+Object3D.traverse = (function () { var n = []; R.Object3D().traverse(function (o) { n.push(o.name); }); return n; })()
+Object3D.traverseVisible = (function () { var o = R.Object3D(); o.children[0].visible = false; var n = []; o.traverseVisible(function (x) { n.push(x.name); }); return n; })()
+Object3D.traverseAncestors = (function () { var o = R.Object3D(); var n = []; o.children[0].children[0].traverseAncestors(function (x) { n.push(x.name); }); return n; })()
+Object3D.updateMatrix = (function () { var o = new THREE.Object3D(); o.position.set(1, 2, 3); o.rotation.y = 0.5; o.updateMatrix(); return o.matrix; })()
+Object3D.updateMatrixWorld = (function () { var o = R.Object3D(); return o.children[0].children[0].matrixWorld; })()
+Object3D.updateWorldMatrix = (function () { var o = R.Object3D(); var g = o.children[0].children[0]; o.position.x = 9; g.updateWorldMatrix(true, false); return g.matrixWorld; })()
+Object3D.matrixAutoUpdateOff = (function () { var o = new THREE.Object3D(); o.matrixAutoUpdate = false; o.position.x = 5; o.updateMatrixWorld(); return o.matrixWorld; })()
+Object3D.clone = (function () { var c = R.Object3D().clone(); return [c.name, c.children.length, c.children[0].children[0].name, c.position]; })()
+Object3D.copy = (function () { var a = new THREE.Object3D(); a.copy(R.Object3D(), false); return [a.name, a.children.length, a.position, a.scale]; })()
+Object3D.toJSON = (function () { var j = R.Object3D().toJSON(); return [j.metadata.type, j.object.type, j.object.children.length]; })()
+Object3D.layers = (function () { var o = new THREE.Object3D(); o.layers.set(2); o.layers.enable(4); return [o.layers.mask, o.layers.isEnabled(4), o.layers.isEnabled(0)]; })()
+Object3D.userData = (function () { var o = new THREE.Object3D(); o.userData.a = 1; return o.clone().userData; })()
+Object3D.events = (function () { var o = R.Object3D(), c = o.children[0], got = []; o.addEventListener('childadded', function (e) { got.push('added:' + e.child.name); }); o.addEventListener('childremoved', function (e) { got.push('removed:' + e.child.name); }); c.addEventListener('removed', function () { got.push('self-removed'); }); o.remove(c); o.add(c); return got; })()
+Object3D.DEFAULT_UP = THREE.Object3D.DEFAULT_UP
+Object3D.onBeforeRender = typeof new THREE.Object3D().onBeforeRender
+
+# ---- Layers / EventDispatcher / Timer / Clock -----------------------------
+Layers.new = new THREE.Layers().mask
+Layers.set = (function () { var l = new THREE.Layers(); l.set(3); return l.mask; })()
+Layers.enable = (function () { var l = new THREE.Layers(); l.enable(3); return l.mask; })()
+Layers.enableAll = (function () { var l = new THREE.Layers(); l.enableAll(); return l.mask; })()
+Layers.toggle = (function () { var l = new THREE.Layers(); l.toggle(0); l.toggle(5); return l.mask; })()
+Layers.disable = (function () { var l = new THREE.Layers(); l.enableAll(); l.disable(1); return l.mask; })()
+Layers.disableAll = (function () { var l = new THREE.Layers(); l.disableAll(); return l.mask; })()
+Layers.test = (function () { var a = new THREE.Layers(), b = new THREE.Layers(); b.set(2); var r1 = a.test(b); b.enable(0); return [r1, a.test(b)]; })()
+Layers.isEnabled = (function () { var l = new THREE.Layers(); l.enable(7); return [l.isEnabled(7), l.isEnabled(6)]; })()
+EventDispatcher.addEventListener = (function () { var d = new THREE.EventDispatcher(), n = 0; d.addEventListener('x', function () { n++; }); d.dispatchEvent({ type: 'x' }); d.dispatchEvent({ type: 'x' }); return n; })()
+EventDispatcher.hasEventListener = (function () { var d = new THREE.EventDispatcher(), f = function () {}; d.addEventListener('x', f); return [d.hasEventListener('x', f), d.hasEventListener('y', f)]; })()
+EventDispatcher.removeEventListener = (function () { var d = new THREE.EventDispatcher(), n = 0, f = function () { n++; }; d.addEventListener('x', f); d.removeEventListener('x', f); d.dispatchEvent({ type: 'x' }); return n; })()
+EventDispatcher.dispatchEvent = (function () { var d = new THREE.EventDispatcher(), got = null; d.addEventListener('x', function (e) { got = [e.type, e.target === d, e.v]; }); d.dispatchEvent({ type: 'x', v: 7 }); return got; })()
+Timer.new = (function () { var t = new THREE.Timer(); t.update(); return [t.getDelta() >= 0, t.getElapsed() >= 0, t.getTimescale()]; })()
+Timer.setTimescale = (function () { var t = new THREE.Timer(); t.setTimescale(2); return t.getTimescale(); })()
+Timer.update = (function () { var t = new THREE.Timer(); t.update(1000); t.update(1500); return t.getDelta(); })()
+Timer.reset = (function () { var t = new THREE.Timer(); t.setTimescale(3); t.update(1000); t.update(1500); var d = t.getDelta(); t.reset(); return [d, t.getTimescale()]; })()
+Clock.new = (function () { var c = new THREE.Clock(false); return [c.autoStart, c.running, c.elapsedTime]; })()
+Clock.start = (function () { var c = new THREE.Clock(false); c.start(); return [c.running, c.getElapsedTime() >= 0]; })()
+Clock.stop = (function () { var c = new THREE.Clock(); c.start(); c.stop(); return c.running; })()
+Clock.getDelta = typeof new THREE.Clock().getDelta()
+
+# ---- BufferAttribute ------------------------------------------------------
+BufferAttribute.new = (function () { var a = P.ATTR(); return [a.itemSize, a.count, a.normalized, a.usage, a.version]; })()
+BufferAttribute.Float32BufferAttribute = new THREE.Float32BufferAttribute([1, 2, 3, 4, 5, 6], 3)
+BufferAttribute.Uint16BufferAttribute = (function () { var a = new THREE.Uint16BufferAttribute([1, 2, 3], 1); return [a.count, a.array.constructor.name]; })()
+BufferAttribute.Uint32BufferAttribute = (function () { var a = new THREE.Uint32BufferAttribute([1, 2, 3], 1); return [a.count, a.array.constructor.name]; })()
+BufferAttribute.Int8BufferAttribute = new THREE.Int8BufferAttribute([1, -2, 3, 4], 2).count
+BufferAttribute.Uint8BufferAttribute = new THREE.Uint8BufferAttribute([1, 2, 3, 4], 4).count
+BufferAttribute.normalized = new THREE.BufferAttribute(new Uint8Array([0, 128, 255]), 1, true).getX(1)
+BufferAttribute.needsUpdate = (function () { var a = P.ATTR(); a.needsUpdate = true; return a.version; })()
+BufferAttribute.setUsage = P.ATTR().setUsage(THREE.DynamicDrawUsage).usage
+BufferAttribute.addUpdateRange = (function () { var a = P.ATTR(); a.addUpdateRange(0, 3); return a.updateRanges; })()
+BufferAttribute.clearUpdateRanges = (function () { var a = P.ATTR(); a.addUpdateRange(0, 3); a.clearUpdateRanges(); return a.updateRanges.length; })()
+BufferAttribute.copy = new THREE.BufferAttribute(new Float32Array(12), 3).copy(P.ATTR())
+BufferAttribute.copyAt = new THREE.BufferAttribute(new Float32Array(12), 3).copyAt(1, P.ATTR(), 2)
+BufferAttribute.copyArray = new THREE.BufferAttribute(new Float32Array(6), 3).copyArray([9, 8, 7, 6, 5, 4])
+BufferAttribute.applyMatrix3 M3
+BufferAttribute.applyMatrix4 M4
+BufferAttribute.applyNormalMatrix M3
+BufferAttribute.transformDirection M4
+BufferAttribute.set = new THREE.BufferAttribute(new Float32Array(6), 3).set([1, 2], 3)
+BufferAttribute.getComponent = P.ATTR().getComponent(1, 2)
+BufferAttribute.setComponent n:1 n:2 n:9
+BufferAttribute.getX = P.ATTR().getX(2)
+BufferAttribute.setX n:1 n:9
+BufferAttribute.getY = P.ATTR().getY(2)
+BufferAttribute.setY n:1 n:9
+BufferAttribute.getZ = P.ATTR().getZ(2)
+BufferAttribute.setZ n:1 n:9
+BufferAttribute.getW = P.ATTR4().getW(1)
+BufferAttribute.setW = P.ATTR4().setW(1, 9)
+BufferAttribute.setXY n:1 n:7 n:8
+BufferAttribute.setXYZ n:1 n:7 n:8 n:9
+BufferAttribute.setXYZW = P.ATTR4().setXYZW(0, 5, 6, 7, 8)
+BufferAttribute.onUpload = typeof P.ATTR().onUpload(function () {})
+BufferAttribute.clone
+BufferAttribute.toJSON = (function () { var j = P.ATTR().toJSON(); return [j.itemSize, j.type, j.array.length, j.normalized]; })()
+BufferAttribute.InterleavedBufferAttribute = (function () { var ib = new THREE.InterleavedBuffer(new Float32Array([1, 2, 3, 0, 0, 4, 5, 6, 1, 1]), 5); var a = new THREE.InterleavedBufferAttribute(ib, 3, 0); var u = new THREE.InterleavedBufferAttribute(ib, 2, 3); return [a.count, a.getX(1), a.getZ(1), u.getY(1)]; })()
+BufferAttribute.InstancedBufferAttribute = (function () { var a = new THREE.InstancedBufferAttribute(new Float32Array(6), 3, false, 2); return [a.count, a.meshPerAttribute]; })()
+
+# ---- BufferGeometry -------------------------------------------------------
+BufferGeometry.new = new THREE.BufferGeometry()
+BufferGeometry.setAttribute = (function () { var g = new THREE.BufferGeometry(); g.setAttribute('position', P.ATTR()); return g; })()
+BufferGeometry.getAttribute = R.BufferGeometry().getAttribute('normal')
+BufferGeometry.deleteAttribute = (function () { var g = R.BufferGeometry(); g.deleteAttribute('uv'); return g.hasAttribute('uv'); })()
+BufferGeometry.hasAttribute = [R.BufferGeometry().hasAttribute('position'), R.BufferGeometry().hasAttribute('color')]
+BufferGeometry.setIndex = (function () { var g = new THREE.BufferGeometry(); g.setAttribute('position', P.ATTR()); g.setIndex([0, 1, 2, 2, 3, 0]); return g; })()
+BufferGeometry.getIndex = R.BufferGeometry().getIndex()
+BufferGeometry.addGroup = (function () { var g = new THREE.BufferGeometry(); g.addGroup(0, 6, 0); g.addGroup(6, 3, 1); return g.groups; })()
+BufferGeometry.clearGroups = (function () { var g = R.BufferGeometry(); g.clearGroups(); return g.groups.length; })()
+BufferGeometry.setDrawRange = (function () { var g = new THREE.BufferGeometry(); g.setDrawRange(3, 9); return g.drawRange; })()
+BufferGeometry.applyMatrix4 M4
+BufferGeometry.applyQuaternion Q
+BufferGeometry.rotateX N
+BufferGeometry.rotateY N
+BufferGeometry.rotateZ N
+BufferGeometry.translate n:1 n:2 n:3
+BufferGeometry.scale n:2 n:1 n:0.5
+BufferGeometry.lookAt V3c
+BufferGeometry.center = (function () { var g = R.BufferGeometry(); g.translate(5, 0, 0); g.center(); g.computeBoundingBox(); return g.boundingBox; })()
+BufferGeometry.setFromPoints = new THREE.BufferGeometry().setFromPoints([P.V3(), P.V3b(), P.V3c()])
+BufferGeometry.computeBoundingBox = (function () { var g = R.BufferGeometry(); g.computeBoundingBox(); return g.boundingBox; })()
+BufferGeometry.computeBoundingSphere = (function () { var g = R.BufferGeometry(); g.computeBoundingSphere(); return g.boundingSphere; })()
+BufferGeometry.computeTangents = (function () { var g = new THREE.SphereGeometry(1, 8, 6); g.computeTangents(); return g.getAttribute('tangent'); })()
+BufferGeometry.computeVertexNormals = (function () { var g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1], 3)); g.setIndex([0, 1, 2, 0, 2, 3, 0, 3, 1]); g.computeVertexNormals(); return g.getAttribute('normal'); })()
+BufferGeometry.normalizeNormals = (function () { var g = R.BufferGeometry(); g.getAttribute('normal').setXYZ(0, 3, 0, 0); g.normalizeNormals(); return g.getAttribute('normal').getX(0); })()
+BufferGeometry.toNonIndexed = R.BufferGeometry().toNonIndexed()
+BufferGeometry.toJSON = (function () { var j = R.BufferGeometry().toJSON(); return [j.metadata.type, j.type, j.parameters]; })()
+BufferGeometry.clone
+BufferGeometry.copy = new THREE.BufferGeometry().copy(R.BufferGeometry())
+BufferGeometry.dispose = (function () { var g = R.BufferGeometry(), n = 0; g.addEventListener('dispose', function () { n++; }); g.dispose(); return n; })()
+BufferGeometry.morphAttributes = (function () { var g = R.BufferGeometry(); g.morphAttributes.position = [P.ATTR()]; return g.clone().morphAttributes.position.length; })()
+BufferGeometry.InstancedBufferGeometry = (function () { var g = new THREE.InstancedBufferGeometry(); g.instanceCount = 5; return [g.type, g.instanceCount, g.clone().instanceCount]; })()
+BufferGeometry.mergeVertices = '<addon: BufferGeometryUtils.mergeVertices>'
+
+# ---- Raycaster ------------------------------------------------------------
+Raycaster.new = (function () { var r = new THREE.Raycaster(); return [r.near, r.far, r.ray, r.params.Line.threshold, r.params.Points.threshold]; })()
+Raycaster.set = (function () { var r = new THREE.Raycaster(); r.set(P.V3(), P.V3n()); return r.ray; })()
+Raycaster.setFromCamera = (function () { var r = new THREE.Raycaster(); r.setFromCamera(new THREE.Vector2(0.25, -0.4), P.CAM()); return r.ray; })()
+Raycaster.setFromCameraOrtho = (function () { var r = new THREE.Raycaster(); r.setFromCamera(new THREE.Vector2(0.25, -0.4), P.OCAM()); return r.ray; })()
+Raycaster.intersectObject = (function () { var m = P.MESH(); var r = new THREE.Raycaster(new THREE.Vector3(1, 0.5, 5), new THREE.Vector3(0, 0, -1)); return r.intersectObject(m).map(function (h) { return [h.distance, h.point, h.faceIndex, h.uv, h.object === m]; }); })()
+Raycaster.intersectObjects = (function () { var a = P.MESH(), b = P.MESH(); b.position.z = -5; b.updateMatrixWorld(); var r = new THREE.Raycaster(new THREE.Vector3(1, 0.5, 5), new THREE.Vector3(0, 0, -1)); return r.intersectObjects([b, a]).map(function (h) { return [h.distance, h.object === a]; }); })()
+Raycaster.recursive = (function () { var g = new THREE.Group(); g.add(P.MESH()); g.updateMatrixWorld(true); var r = new THREE.Raycaster(new THREE.Vector3(1, 0.5, 5), new THREE.Vector3(0, 0, -1)); return [r.intersectObject(g, true).length, r.intersectObject(g, false).length]; })()
+Raycaster.nearFar = (function () { var r = new THREE.Raycaster(new THREE.Vector3(1, 0.5, 5), new THREE.Vector3(0, 0, -1), 0, 3); return r.intersectObject(P.MESH()).length; })()
+Raycaster.layers = (function () { var m = P.MESH(); m.layers.set(3); var r = new THREE.Raycaster(new THREE.Vector3(1, 0.5, 5), new THREE.Vector3(0, 0, -1)); var a = r.intersectObject(m).length; r.layers.enable(3); return [a, r.intersectObject(m).length]; })()
+Raycaster.sphere = (function () { var m = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial()); var r = new THREE.Raycaster(new THREE.Vector3(0.3, 0.2, 5), new THREE.Vector3(0, 0, -1)); var h = r.intersectObject(m)[0]; return [h.distance, h.point, h.normal]; })()
+Raycaster.backSide = (function () { var m = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial()); var r = new THREE.Raycaster(new THREE.Vector3(0, 0, -5), new THREE.Vector3(0, 0, 1)); var a = r.intersectObject(m).length; m.material.side = THREE.DoubleSide; return [a, r.intersectObject(m).length]; })()
+Raycaster.points = (function () { var g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.5, 0, 0)]); var p = new THREE.Points(g, new THREE.PointsMaterial()); var r = new THREE.Raycaster(new THREE.Vector3(0.05, 0, 5), new THREE.Vector3(0, 0, -1)); r.params.Points.threshold = 0.1; return r.intersectObject(p).map(function (h) { return h.index; }); })()
+Raycaster.line = (function () { var g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-1, 0, 0), new THREE.Vector3(1, 0, 0)]); var l = new THREE.Line(g, new THREE.LineBasicMaterial()); var r = new THREE.Raycaster(new THREE.Vector3(0.2, 0.05, 5), new THREE.Vector3(0, 0, -1)); r.params.Line.threshold = 0.1; return r.intersectObject(l).length; })()
+Raycaster.sprite = (function () { var s = new THREE.Sprite(); var r = new THREE.Raycaster(new THREE.Vector3(0.1, 0.1, 5), new THREE.Vector3(0, 0, -1)); r.camera = P.CAM(); return r.intersectObject(s).length; })()
+Raycaster.instanced = (function () { var m = new THREE.InstancedMesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial(), 2); m.setMatrixAt(0, new THREE.Matrix4().makeTranslation(-2, 0, 0)); m.setMatrixAt(1, new THREE.Matrix4().makeTranslation(2, 0, 0)); var r = new THREE.Raycaster(new THREE.Vector3(2, 0, 5), new THREE.Vector3(0, 0, -1)); return r.intersectObject(m).map(function (h) { return h.instanceId; }); })()
+
+# ---- Curves ---------------------------------------------------------------
+Curve.CatmullRomCurve3 = (function () { var c = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2, 0), new THREE.Vector3(3, 1, 1), new THREE.Vector3(4, 0, 0)]); return [c.getPoint(0.3), c.getPointAt(0.3), c.getLength(), c.getTangent(0.5)]; })()
+Curve.CatmullRomCurve3Closed = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2, 0), new THREE.Vector3(3, 1, 1)], true, 'centripetal').getPoint(0.8)
+Curve.getPoints = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2, 0), new THREE.Vector3(3, 1, 1)]).getPoints(4)
+Curve.getSpacedPoints = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2, 0), new THREE.Vector3(3, 1, 1)]).getSpacedPoints(4)
+Curve.computeFrenetFrames = (function () { var f = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2, 0), new THREE.Vector3(3, 1, 1)]).computeFrenetFrames(3, false); return [f.tangents[1], f.normals[1], f.binormals[1]]; })()
+Curve.LineCurve3 = new THREE.LineCurve3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(2, 2, 2)).getPoint(0.25)
+Curve.QuadraticBezierCurve3 = new THREE.QuadraticBezierCurve3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2, 0), new THREE.Vector3(2, 0, 0)).getPoint(0.3)
+Curve.CubicBezierCurve3 = new THREE.CubicBezierCurve3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 2, 0), new THREE.Vector3(2, -1, 0), new THREE.Vector3(3, 0, 1)).getPoint(0.6)
+Curve.EllipseCurve = new THREE.EllipseCurve(0, 0, 2, 1, 0, Math.PI, false, 0.2).getPoint(0.4)
+Curve.ArcCurve = new THREE.ArcCurve(1, 1, 2, 0, Math.PI / 2, false).getPoint(0.5)
+Curve.SplineCurve = new THREE.SplineCurve([new THREE.Vector2(0, 0), new THREE.Vector2(1, 2), new THREE.Vector2(3, 1)]).getPoint(0.5)
+Curve.QuadraticBezierCurve = new THREE.QuadraticBezierCurve(new THREE.Vector2(0, 0), new THREE.Vector2(1, 2), new THREE.Vector2(2, 0)).getPoint(0.3)
+Curve.CubicBezierCurve = new THREE.CubicBezierCurve(new THREE.Vector2(0, 0), new THREE.Vector2(1, 2), new THREE.Vector2(2, -1), new THREE.Vector2(3, 0)).getPoint(0.6)
+Curve.LineCurve = new THREE.LineCurve(new THREE.Vector2(0, 0), new THREE.Vector2(2, 4)).getPoint(0.25)
+Curve.CurvePath = (function () { var p = new THREE.CurvePath(); p.add(new THREE.LineCurve3(new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 0, 0))); p.add(new THREE.LineCurve3(new THREE.Vector3(1, 0, 0), new THREE.Vector3(1, 3, 0))); return [p.getLength(), p.getPoint(0.5)]; })()
+Curve.Path = (function () { var p = new THREE.Path(); p.moveTo(0, 0); p.lineTo(2, 0); p.quadraticCurveTo(3, 1, 2, 2); p.lineTo(0, 0); return [p.getPoints(2).length, p.getLength()]; })()
+Curve.Shape = (function () { var s = new THREE.Shape(); s.moveTo(0, 0); s.lineTo(2, 0); s.lineTo(2, 2); s.lineTo(0, 2); s.lineTo(0, 0); var h = new THREE.Path(); h.absarc(1, 1, 0.5, 0, Math.PI * 2, true); s.holes.push(h); var p = s.extractPoints(4); return [p.shape.length, p.holes.length, p.holes[0].length]; })()
+Curve.ShapeUtils = [THREE.ShapeUtils.area([new THREE.Vector2(0, 0), new THREE.Vector2(2, 0), new THREE.Vector2(2, 2)]), THREE.ShapeUtils.isClockWise([new THREE.Vector2(0, 0), new THREE.Vector2(0, 2), new THREE.Vector2(2, 2)]), THREE.ShapeUtils.triangulateShape([new THREE.Vector2(0, 0), new THREE.Vector2(2, 0), new THREE.Vector2(2, 2), new THREE.Vector2(0, 2)], []).length]
+
+# ---- Cameras --------------------------------------------------------------
+PerspectiveCamera.new = (function () { var c = new THREE.PerspectiveCamera(); return [c.fov, c.aspect, c.near, c.far, c.zoom, c.type]; })()
+PerspectiveCamera.projectionMatrix = R.PerspectiveCamera().projectionMatrix
+PerspectiveCamera.projectionMatrixInverse = R.PerspectiveCamera().projectionMatrixInverse
+PerspectiveCamera.matrixWorldInverse = R.PerspectiveCamera().matrixWorldInverse
+PerspectiveCamera.updateProjectionMatrix = (function () { var c = R.PerspectiveCamera(); c.fov = 70; c.aspect = 2; c.zoom = 1.5; c.updateProjectionMatrix(); return c.projectionMatrix; })()
+PerspectiveCamera.setFocalLength = (function () { var c = R.PerspectiveCamera(); c.setFocalLength(35); return c.fov; })()
+PerspectiveCamera.getFocalLength
+PerspectiveCamera.getEffectiveFOV
+PerspectiveCamera.getFilmWidth
+PerspectiveCamera.getFilmHeight
+PerspectiveCamera.getViewBounds = (function () { var a = new THREE.Vector2(), b = new THREE.Vector2(); R.PerspectiveCamera().getViewBounds(5, a, b); return [a, b]; })()
+PerspectiveCamera.getViewSize = R.PerspectiveCamera().getViewSize(5, new THREE.Vector2())
+PerspectiveCamera.setViewOffset = (function () { var c = R.PerspectiveCamera(); c.setViewOffset(1920, 1080, 480, 270, 960, 540); return c.projectionMatrix; })()
+PerspectiveCamera.clearViewOffset = (function () { var c = R.PerspectiveCamera(); c.setViewOffset(1920, 1080, 480, 270, 960, 540); c.clearViewOffset(); return c.view; })()
+PerspectiveCamera.getWorldDirection = R.PerspectiveCamera().getWorldDirection(new THREE.Vector3())
+PerspectiveCamera.lookAt = (function () { var c = new THREE.PerspectiveCamera(); c.position.set(3, 4, 5); c.lookAt(0, 1, 0); return c.quaternion; })()
+PerspectiveCamera.clone = (function () { var c = R.PerspectiveCamera().clone(); return [c.fov, c.aspect, c.position, c.projectionMatrix]; })()
+PerspectiveCamera.toJSON = (function () { var j = R.PerspectiveCamera().toJSON(); return [j.object.type, j.object.fov, j.object.near]; })()
+OrthographicCamera.new = (function () { var c = new THREE.OrthographicCamera(); return [c.left, c.right, c.top, c.bottom, c.near, c.far, c.zoom]; })()
+OrthographicCamera.projectionMatrix = R.OrthographicCamera().projectionMatrix
+OrthographicCamera.updateProjectionMatrix = (function () { var c = R.OrthographicCamera(); c.zoom = 2; c.updateProjectionMatrix(); return c.projectionMatrix; })()
+OrthographicCamera.setViewOffset = (function () { var c = R.OrthographicCamera(); c.setViewOffset(800, 600, 100, 50, 400, 300); return c.projectionMatrix; })()
+OrthographicCamera.clearViewOffset = (function () { var c = R.OrthographicCamera(); c.setViewOffset(800, 600, 100, 50, 400, 300); c.clearViewOffset(); return c.projectionMatrix; })()
+OrthographicCamera.toJSON = (function () { var j = R.OrthographicCamera().toJSON(); return [j.object.type, j.object.left, j.object.far]; })()
+Camera.ArrayCamera = (function () { var c = new THREE.ArrayCamera([new THREE.PerspectiveCamera(), new THREE.PerspectiveCamera()]); return [c.isArrayCamera, c.cameras.length]; })()
+Camera.CubeCamera = (function () { var rt = new THREE.WebGLCubeRenderTarget(16); var c = new THREE.CubeCamera(0.1, 10, rt); return [c.children.length, c.children[0].fov]; })()
+Camera.StereoCamera = (function () { var s = new THREE.StereoCamera(); s.update(R.PerspectiveCamera()); return [s.cameraL.projectionMatrix, s.cameraR.matrixWorld]; })()
+
+# ---- Mesh / objects -------------------------------------------------------
+Mesh.new = (function () { var m = new THREE.Mesh(); return [m.type, m.geometry.type, m.material.type, m.isMesh]; })()
+Mesh.getVertexPosition = R.Mesh().getVertexPosition(3, new THREE.Vector3())
+Mesh.updateMorphTargets = (function () { var g = new THREE.BoxGeometry(); g.morphAttributes.position = [g.getAttribute('position').clone()]; var m = new THREE.Mesh(g, new THREE.MeshBasicMaterial()); return [m.morphTargetInfluences, m.morphTargetDictionary]; })()
+Mesh.clone = (function () { var a = R.Mesh(), b = a.clone(); return [b.geometry === a.geometry, b.material === a.material, b.position]; })()
+Mesh.materialArray = (function () { var m = new THREE.Mesh(new THREE.BoxGeometry(), [new THREE.MeshBasicMaterial(), new THREE.MeshLambertMaterial()]); return m.material.length; })()
+Group.new = (function () { var g = new THREE.Group(); return [g.type, g.isGroup]; })()
+Scene.new = (function () { var s = new THREE.Scene(); return [s.type, s.background, s.environment, s.fog, s.backgroundBlurriness, s.backgroundIntensity, s.environmentIntensity, s.overrideMaterial]; })()
+Scene.background = (function () { var s = new THREE.Scene(); s.background = new THREE.Color(0x102030); return s.background; })()
+Scene.fog = (function () { var s = new THREE.Scene(); s.fog = new THREE.Fog(0xffffff, 1, 10); return [s.fog.near, s.fog.far, s.fog.color]; })()
+Scene.toJSON = (function () { var s = new THREE.Scene(); s.add(R.Mesh()); var j = s.toJSON(); return [j.object.type, j.object.children.length, j.geometries.length, j.materials.length]; })()
+Fog.new = (function () { var f = new THREE.Fog(0x334455, 2, 20); return [f.color, f.near, f.far, f.isFog]; })()
+Fog.clone = new THREE.Fog(0x334455, 2, 20).clone().far
+FogExp2.new = (function () { var f = new THREE.FogExp2(0x334455, 0.05); return [f.color, f.density, f.isFogExp2]; })()
+FogExp2.clone = new THREE.FogExp2(0x334455, 0.05).clone().density
+Sprite.new = (function () { var s = new THREE.Sprite(); return [s.type, s.center, s.material.type, s.geometry.getAttribute('position').count]; })()
+Points.new = (function () { var p = new THREE.Points(); return [p.type, p.isPoints, p.material.type]; })()
+Line.new = (function () { var l = new THREE.Line(); return [l.type, l.isLine, l.material.type]; })()
+Line.computeLineDistances = (function () { var g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(3, 4, 0), new THREE.Vector3(3, 4, 2)]); var l = new THREE.Line(g); l.computeLineDistances(); return l.geometry.getAttribute('lineDistance'); })()
+LineSegments.new = new THREE.LineSegments().type
+LineLoop.new = new THREE.LineLoop().type
+InstancedMesh.new = (function () { var m = new THREE.InstancedMesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial(), 3); return [m.count, m.instanceMatrix.count, m.instanceColor]; })()
+InstancedMesh.setMatrixAt = (function () { var m = new THREE.InstancedMesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial(), 3); m.setMatrixAt(1, P.M4()); var o = new THREE.Matrix4(); m.getMatrixAt(1, o); return o; })()
+InstancedMesh.setColorAt = (function () { var m = new THREE.InstancedMesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial(), 3); m.setColorAt(2, P.C()); var o = new THREE.Color(); m.getColorAt(2, o); return [o, m.instanceColor.count]; })()
+InstancedMesh.computeBoundingBox = (function () { var m = new THREE.InstancedMesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial(), 2); m.setMatrixAt(0, new THREE.Matrix4().makeTranslation(-2, 0, 0)); m.setMatrixAt(1, new THREE.Matrix4().makeTranslation(3, 1, 0)); m.computeBoundingBox(); return m.boundingBox; })()
+InstancedMesh.computeBoundingSphere = (function () { var m = new THREE.InstancedMesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial(), 2); m.setMatrixAt(0, new THREE.Matrix4().makeTranslation(-2, 0, 0)); m.setMatrixAt(1, new THREE.Matrix4().makeTranslation(3, 1, 0)); m.computeBoundingSphere(); return m.boundingSphere; })()
+InstancedMesh.dispose = (function () { var m = new THREE.InstancedMesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial(), 2), n = 0; m.addEventListener('dispose', function () { n++; }); m.dispose(); return n; })()
+LOD.new = (function () { var l = new THREE.LOD(); l.addLevel(new THREE.Object3D(), 0); l.addLevel(new THREE.Object3D(), 10); return [l.levels.length, l.getObjectForDistance(12) === l.levels[1].object]; })()
+LOD.update = (function () { var l = new THREE.LOD(); var a = new THREE.Object3D(), b = new THREE.Object3D(); l.addLevel(a, 0); l.addLevel(b, 5); var c = new THREE.PerspectiveCamera(); c.position.set(0, 0, 8); c.updateMatrixWorld(); l.updateMatrixWorld(); l.update(c); return [a.visible, b.visible, l.getCurrentLevel()]; })()
+SkinnedMesh.bones = (function () { var b0 = new THREE.Bone(), b1 = new THREE.Bone(); b1.position.y = 1; b0.add(b1); var sk = new THREE.Skeleton([b0, b1]); return [sk.bones.length, sk.boneInverses.length, b1.isBone]; })()
+SkinnedMesh.bind = (function () { var g = new THREE.CylinderGeometry(0.2, 0.2, 2, 4, 2); var n = g.getAttribute('position').count; g.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Array(n * 4).fill(0), 4)); g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(new Array(n * 4).fill(0).map(function (_, i) { return i % 4 === 0 ? 1 : 0; }), 4)); var m = new THREE.SkinnedMesh(g, new THREE.MeshBasicMaterial()); var b = new THREE.Bone(); m.add(b); m.bind(new THREE.Skeleton([b])); b.position.x = 1; m.updateMatrixWorld(true); return m.getVertexPosition(0, new THREE.Vector3()); })()
+
+# ---- Materials (defaults and props) ---------------------------------------
+Material.MeshBasicMaterial = (function () { var m = new THREE.MeshBasicMaterial(); return [m.type, m.color, m.map, m.transparent, m.opacity, m.side, m.depthWrite, m.depthTest, m.blending, m.wireframe, m.fog, m.toneMapped, m.vertexColors, m.alphaTest]; })()
+Material.MeshLambertMaterial = (function () { var m = new THREE.MeshLambertMaterial(); return [m.type, m.color, m.emissive, m.emissiveIntensity, m.flatShading]; })()
+Material.MeshPhongMaterial = (function () { var m = new THREE.MeshPhongMaterial(); return [m.type, m.color, m.specular, m.shininess, m.emissive, m.flatShading, m.reflectivity, m.refractionRatio]; })()
+Material.MeshStandardMaterial = (function () { var m = new THREE.MeshStandardMaterial(); return [m.type, m.color, m.roughness, m.metalness, m.emissive, m.envMapIntensity, m.normalScale, m.aoMapIntensity, m.displacementScale, m.flatShading]; })()
+Material.MeshPhysicalMaterial = (function () { var m = new THREE.MeshPhysicalMaterial(); return [m.type, m.clearcoat, m.clearcoatRoughness, m.ior, m.reflectivity, m.transmission, m.thickness, m.sheen, m.iridescence, m.anisotropy, m.specularIntensity, m.attenuationDistance]; })()
+Material.MeshToonMaterial = (function () { var m = new THREE.MeshToonMaterial(); return [m.type, m.color, m.gradientMap]; })()
+Material.MeshNormalMaterial = (function () { var m = new THREE.MeshNormalMaterial(); return [m.type, m.flatShading, m.normalMapType]; })()
+Material.MeshMatcapMaterial = (function () { var m = new THREE.MeshMatcapMaterial(); return [m.type, m.color, m.matcap]; })()
+Material.MeshDepthMaterial = (function () { var m = new THREE.MeshDepthMaterial(); return [m.type, m.depthPacking]; })()
+Material.MeshDistanceMaterial = new THREE.MeshDistanceMaterial().type
+Material.PointsMaterial = (function () { var m = new THREE.PointsMaterial(); return [m.type, m.color, m.size, m.sizeAttenuation, m.map]; })()
+Material.LineBasicMaterial = (function () { var m = new THREE.LineBasicMaterial(); return [m.type, m.color, m.linewidth, m.linecap, m.linejoin]; })()
+Material.LineDashedMaterial = (function () { var m = new THREE.LineDashedMaterial(); return [m.type, m.scale, m.dashSize, m.gapSize]; })()
+Material.SpriteMaterial = (function () { var m = new THREE.SpriteMaterial(); return [m.type, m.color, m.rotation, m.sizeAttenuation, m.transparent]; })()
+Material.ShadowMaterial = (function () { var m = new THREE.ShadowMaterial(); return [m.type, m.color, m.transparent]; })()
+Material.ShaderMaterial = (function () { var m = new THREE.ShaderMaterial({ uniforms: { t: { value: 1 } }, vertexShader: 'void main(){}', fragmentShader: 'void main(){}' }); return [m.type, m.uniforms.t.value, m.lights, m.glslVersion]; })()
+Material.RawShaderMaterial = new THREE.RawShaderMaterial().type
+Material.ctorParams = (function () { var m = new THREE.MeshStandardMaterial({ color: 'red', roughness: 0.2, transparent: true, opacity: 0.5, side: THREE.DoubleSide }); return [m.color, m.roughness, m.transparent, m.opacity, m.side]; })()
+Material.setValues = (function () { var m = new THREE.MeshPhongMaterial(); m.setValues({ color: 0x00ff00, shininess: 80, emissive: 0x112233 }); return [m.color, m.shininess, m.emissive]; })()
+Material.clone = (function () { var m = new THREE.MeshStandardMaterial({ color: 0x336699, metalness: 0.7 }).clone(); return [m.type, m.color, m.metalness]; })()
+Material.copy = (function () { var m = new THREE.MeshBasicMaterial(); m.copy(new THREE.MeshBasicMaterial({ color: 0xff0000, opacity: 0.3 })); return [m.color, m.opacity]; })()
+Material.needsUpdate = (function () { var m = new THREE.MeshBasicMaterial(); var v = m.version; m.needsUpdate = true; return m.version - v; })()
+Material.dispose = (function () { var m = new THREE.MeshBasicMaterial(), n = 0; m.addEventListener('dispose', function () { n++; }); m.dispose(); return n; })()
+Material.toJSON = (function () { var j = new THREE.MeshStandardMaterial({ color: 0x336699 }).toJSON(); return [j.type, j.color, j.roughness]; })()
+Material.onBeforeCompile = typeof new THREE.MeshBasicMaterial().onBeforeCompile
+Material.colorSetStyle = (function () { var m = new THREE.MeshBasicMaterial(); m.color.set('hotpink'); return m.color; })()
+
+# ---- Lights ---------------------------------------------------------------
+Light.AmbientLight = (function () { var l = new THREE.AmbientLight(0xffffff, 0.5); return [l.type, l.color, l.intensity, l.isAmbientLight]; })()
+Light.DirectionalLight = (function () { var l = new THREE.DirectionalLight(0xffeedd, 2); return [l.type, l.color, l.intensity, l.position, l.target.position, l.castShadow, l.shadow.mapSize, l.shadow.camera.left, l.shadow.bias]; })()
+Light.PointLight = (function () { var l = new THREE.PointLight(0xff0000, 3, 10, 1.5); return [l.type, l.intensity, l.distance, l.decay, l.power, l.shadow.camera.fov]; })()
+Light.PointLightPower = (function () { var l = new THREE.PointLight(0xff0000, 3); l.power = 100; return l.intensity; })()
+Light.SpotLight = (function () { var l = new THREE.SpotLight(0xffffff, 2, 20, Math.PI / 6, 0.3, 2); return [l.type, l.angle, l.penumbra, l.decay, l.distance, l.target.position, l.power, l.map]; })()
+Light.HemisphereLight = (function () { var l = new THREE.HemisphereLight(0x87ceeb, 0x443322, 0.8); return [l.type, l.color, l.groundColor, l.intensity, l.position]; })()
+Light.RectAreaLight = (function () { var l = new THREE.RectAreaLight(0xffffff, 5, 4, 2); return [l.type, l.width, l.height, l.power]; })()
+Light.LightProbe = (function () { var l = new THREE.LightProbe(); return [l.type, l.sh.coefficients.length, l.intensity]; })()
+Light.SphericalHarmonics3 = (function () { var sh = new THREE.SphericalHarmonics3(); sh.coefficients[0].set(1, 0.5, 0.2); sh.coefficients[1].set(0.1, 0.2, 0.3); return [sh.getAt(new THREE.Vector3(0, 1, 0), new THREE.Vector3()), sh.getIrradianceAt(new THREE.Vector3(0, 1, 0), new THREE.Vector3())]; })()
+Light.shadowCamera = (function () { var l = new THREE.DirectionalLight(); l.castShadow = true; l.shadow.camera.left = -5; l.shadow.camera.updateProjectionMatrix(); return [l.shadow.camera.type, l.shadow.camera.projectionMatrix]; })()
+Light.toJSON = (function () { var j = new THREE.PointLight(0xff0000, 3, 10).toJSON(); return [j.object.type, j.object.intensity, j.object.distance]; })()
+Light.copy = (function () { var a = new THREE.SpotLight(); a.copy(new THREE.SpotLight(0xff00ff, 4, 9, 0.4)); return [a.color, a.intensity, a.distance, a.angle]; })()
+
+# ---- Textures -------------------------------------------------------------
+Texture.new = (function () { var t = new THREE.Texture(); return [t.wrapS, t.wrapT, t.magFilter, t.minFilter, t.anisotropy, t.format, t.type, t.offset, t.repeat, t.center, t.rotation, t.generateMipmaps, t.flipY, t.colorSpace, t.mapping]; })()
+Texture.DataTexture = (function () { var t = new THREE.DataTexture(new Uint8Array(16), 2, 2); return [t.image.width, t.image.height, t.magFilter, t.minFilter, t.generateMipmaps, t.flipY, t.isDataTexture]; })()
+Texture.CanvasTexture = typeof THREE.CanvasTexture
+Texture.CubeTexture = (function () { var t = new THREE.CubeTexture(); return [t.mapping, t.flipY, t.isCubeTexture]; })()
+Texture.Data3DTexture = (function () { var t = new THREE.Data3DTexture(new Uint8Array(8), 2, 2, 2); return [t.image.depth, t.wrapR]; })()
+Texture.DataArrayTexture = (function () { var t = new THREE.DataArrayTexture(new Uint8Array(32), 2, 2, 2); return [t.image.depth, t.isDataArrayTexture]; })()
+Texture.DepthTexture = (function () { var t = new THREE.DepthTexture(4, 4); return [t.format, t.type, t.isDepthTexture]; })()
+Texture.CompressedTexture = new THREE.CompressedTexture([], 4, 4).isCompressedTexture
+Texture.VideoTexture = typeof THREE.VideoTexture
+Texture.updateMatrix = (function () { var t = new THREE.Texture(); t.offset.set(0.1, 0.2); t.repeat.set(2, 3); t.rotation = 0.5; t.center.set(0.5, 0.5); t.updateMatrix(); return t.matrix; })()
+Texture.transformUv = (function () { var t = new THREE.Texture(); t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.MirroredRepeatWrapping; t.repeat.set(2, 2); t.updateMatrix(); return t.transformUv(new THREE.Vector2(0.7, 0.8)); })()
+Texture.clone = (function () { var t = new THREE.Texture(); t.wrapS = THREE.RepeatWrapping; t.repeat.set(3, 3); var c = t.clone(); return [c.wrapS, c.repeat, c.uuid !== t.uuid]; })()
+Texture.needsUpdate = (function () { var t = new THREE.Texture(); var v = t.version; t.needsUpdate = true; return t.version - v; })()
+Texture.dispose = (function () { var t = new THREE.Texture(), n = 0; t.addEventListener('dispose', function () { n++; }); t.dispose(); return n; })()
+Texture.setValues = typeof new THREE.Texture().setValues
+Texture.toJSON = (function () { var t = new THREE.DataTexture(new Uint8Array(16), 2, 2); var j = t.toJSON(); return [j.wrap, j.repeat, j.magFilter]; })()
+Texture.Source = (function () { var t = new THREE.Texture(); return [t.source.isSource, t.source.version]; })()
+Texture.WebGLRenderTarget = (function () { var r = new THREE.WebGLRenderTarget(64, 32); return [r.width, r.height, r.texture.isTexture, r.depthBuffer, r.samples]; })()
+Texture.RenderTargetSetSize = (function () { var r = new THREE.WebGLRenderTarget(64, 32); r.setSize(128, 16); return [r.width, r.height, r.texture.image.width]; })()
+
+# ---- Loaders and misc core -------------------------------------------------
+Loader.LoadingManager = (function () { var m = new THREE.LoadingManager(); var got = []; m.onStart = function () { got.push('start'); }; m.itemStart('a'); m.itemEnd('a'); return [typeof m.resolveURL('x.png'), got]; })()
+Loader.TextureLoader = typeof new THREE.TextureLoader().load
+Loader.FileLoader = typeof new THREE.FileLoader().load
+Loader.ObjectLoader = (function () { var j = R.Mesh().toJSON(); var o = new THREE.ObjectLoader().parse(j); return [o.type, o.geometry.type, o.position]; })()
+Loader.BufferGeometryLoader = new THREE.BufferGeometryLoader().parse(new THREE.BufferGeometry().copy(R.BufferGeometry()).toJSON())
+Loader.MaterialLoader = (function () { var m = new THREE.MaterialLoader().parse(new THREE.MeshPhongMaterial({ color: 0x123456, shininess: 12 }).toJSON()); return [m.type, m.color, m.shininess]; })()
+Loader.Cache = (function () { THREE.Cache.enabled = true; THREE.Cache.add('k', 1); var v = THREE.Cache.get('k'); THREE.Cache.remove('k'); THREE.Cache.enabled = false; return v; })()
+Loader.ImageUtils = typeof THREE.ImageUtils.getDataURL
+Misc.REVISION = Number(THREE.REVISION) >= 160
+Misc.Uniform = new THREE.Uniform(3).value
+Misc.UniformsUtils = (function () { var u = THREE.UniformsUtils.clone({ a: { value: new THREE.Vector3(1, 2, 3) } }); return u.a.value; })()
+Misc.ShaderLib = Object.keys(THREE.ShaderLib).sort()
+Misc.ShaderChunk = typeof THREE.ShaderChunk.common
+Misc.GLBufferAttribute = typeof THREE.GLBufferAttribute
+Misc.ColorManagement = (function () { var c = new THREE.Color(); THREE.ColorManagement.toWorkingColorSpace(c.setRGB(0.5, 0.5, 0.5), THREE.SRGBColorSpace); return [THREE.ColorManagement.enabled, THREE.ColorManagement.workingColorSpace, c]; })()
+Misc.PMREMGenerator = typeof THREE.PMREMGenerator
+Misc.WebGLRenderer = typeof THREE.WebGLRenderer
+Misc.dataTextureLinear = (function () { var t = new THREE.DataTexture(new Uint8Array(16), 2, 2); t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter; t.generateMipmaps = true; t.needsUpdate = true; return [t.magFilter, t.minFilter, t.generateMipmaps]; })()
+
+# ---- Animation -------------------------------------------------------------
+Animation.NumberKeyframeTrack = (function () { var t = new THREE.NumberKeyframeTrack('.opacity', [0, 1, 2], [0, 1, 0.5]); return [t.name, t.times.length, t.values.length, t.getValueSize(), t.ValueTypeName]; })()
+Animation.VectorKeyframeTrack = (function () { var t = new THREE.VectorKeyframeTrack('.position', [0, 1], [0, 0, 0, 1, 2, 3]); return [t.getValueSize(), t.createInterpolant().evaluate(0.25)]; })()
+Animation.QuaternionKeyframeTrack = (function () { var a = new THREE.Quaternion(), b = P.Q(); var t = new THREE.QuaternionKeyframeTrack('.quaternion', [0, 1], a.toArray().concat(b.toArray())); return t.createInterpolant().evaluate(0.4); })()
+Animation.ColorKeyframeTrack = new THREE.ColorKeyframeTrack('.material.color', [0, 1], [1, 0, 0, 0, 0, 1]).createInterpolant().evaluate(0.5)
+Animation.BooleanKeyframeTrack = new THREE.BooleanKeyframeTrack('.visible', [0, 1], [true, false]).createInterpolant().evaluate(0.7)
+Animation.StringKeyframeTrack = new THREE.StringKeyframeTrack('.name', [0, 1], ['a', 'b']).createInterpolant().evaluate(1.2)
+Animation.discrete = (function () { var t = new THREE.NumberKeyframeTrack('.x', [0, 1], [0, 10], THREE.InterpolateDiscrete); return t.createInterpolant().evaluate(0.7); })()
+Animation.smooth = (function () { var t = new THREE.NumberKeyframeTrack('.x', [0, 1, 2], [0, 10, 0], THREE.InterpolateSmooth); return t.createInterpolant().evaluate(0.5); })()
+Animation.AnimationClip = (function () { var c = new THREE.AnimationClip('c', -1, [new THREE.VectorKeyframeTrack('.position', [0, 2], [0, 0, 0, 4, 0, 0])]); return [c.name, c.duration, c.tracks.length]; })()
+Animation.AnimationClipFindByName = (function () { var c = new THREE.AnimationClip('walk', 1, []); return THREE.AnimationClip.findByName([c], 'walk') === c; })()
+Animation.AnimationMixer = (function () { var o = new THREE.Object3D(); var m = new THREE.AnimationMixer(o); var c = new THREE.AnimationClip('c', 2, [new THREE.VectorKeyframeTrack('.position', [0, 2], [0, 0, 0, 4, 0, 0])]); m.clipAction(c).play(); m.update(0.5); return o.position; })()
+Animation.loopOnce = (function () { var o = new THREE.Object3D(); var m = new THREE.AnimationMixer(o); var c = new THREE.AnimationClip('c', 2, [new THREE.VectorKeyframeTrack('.position', [0, 2], [0, 0, 0, 4, 0, 0])]); var a = m.clipAction(c); a.setLoop(THREE.LoopOnce, 1); a.clampWhenFinished = true; a.play(); m.update(5); return [o.position, a.isRunning()]; })()
+Animation.pingPong = (function () { var o = new THREE.Object3D(); var m = new THREE.AnimationMixer(o); var c = new THREE.AnimationClip('c', 2, [new THREE.VectorKeyframeTrack('.position', [0, 2], [0, 0, 0, 4, 0, 0])]); m.clipAction(c).setLoop(THREE.LoopPingPong, Infinity).play(); m.update(3); return o.position; })()
+Animation.crossFade = (function () { var o = new THREE.Object3D(); var m = new THREE.AnimationMixer(o); var a = m.clipAction(new THREE.AnimationClip('a', 1, [new THREE.VectorKeyframeTrack('.position', [0, 1], [0, 0, 0, 0, 0, 0])])); var b = m.clipAction(new THREE.AnimationClip('b', 1, [new THREE.VectorKeyframeTrack('.position', [0, 1], [2, 0, 0, 2, 0, 0])])); a.play(); b.play(); a.crossFadeTo(b, 1, false); m.update(0.5); return [o.position, a.getEffectiveWeight(), b.getEffectiveWeight()]; })()
+Animation.timeScale = (function () { var o = new THREE.Object3D(); var m = new THREE.AnimationMixer(o); var c = new THREE.AnimationClip('c', 2, [new THREE.VectorKeyframeTrack('.position', [0, 2], [0, 0, 0, 4, 0, 0])]); m.clipAction(c).setEffectiveTimeScale(2).play(); m.update(0.5); return o.position; })()
+Animation.events = (function () { var o = new THREE.Object3D(); var m = new THREE.AnimationMixer(o); var got = []; m.addEventListener('loop', function () { got.push('loop'); }); m.addEventListener('finished', function () { got.push('finished'); }); var c = new THREE.AnimationClip('c', 1, [new THREE.NumberKeyframeTrack('.position[x]', [0, 1], [0, 1])]); var a = m.clipAction(c); a.setLoop(THREE.LoopRepeat, 2); a.play(); m.update(0.6); m.update(0.6); m.update(1); return got; })()
+Animation.PropertyBinding = (function () { var p = THREE.PropertyBinding.parseTrackName('arm.material.color'); return [p.nodeName, p.objectName, p.propertyName]; })()
+Animation.subclip = (function () { var c = new THREE.AnimationClip('c', 4, [new THREE.NumberKeyframeTrack('.x', [0, 1, 2, 3, 4], [0, 1, 2, 3, 4])]); var s = THREE.AnimationUtils.subclip(c, 's', 1, 3, 1); return [s.duration, s.tracks[0].times.length]; })()
+Animation.morphInfluence = (function () { var g = new THREE.BoxGeometry(); g.morphAttributes.position = [g.getAttribute('position').clone()]; var me = new THREE.Mesh(g, new THREE.MeshBasicMaterial()); var m = new THREE.AnimationMixer(me); m.clipAction(new THREE.AnimationClip('c', 1, [new THREE.NumberKeyframeTrack('.morphTargetInfluences[0]', [0, 1], [0, 1])])).play(); m.update(0.25); return me.morphTargetInfluences[0]; })()
+Animation.AnimationObjectGroup = (function () { var g = new THREE.AnimationObjectGroup(new THREE.Object3D(), new THREE.Object3D()); return g.stats.objects.total; })()
