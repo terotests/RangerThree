@@ -188,14 +188,16 @@
     "    }\n" +
     "    color = albedo * dif * c3.x + c2.rgb * spec + pspec + emissive;\n" +
     "  }\n" +
-    "  if (c4.w > 0.5 && u_fog[0].x > 0.5) {\n" +
-    "    float f = u_fog[0].x < 1.5 ? (u_fog[1].y == u_fog[1].x ? step(u_fog[1].y, v_depth) : clamp((v_depth - u_fog[1].x) / (u_fog[1].y - u_fog[1].x), 0.0, 1.0))\n" +
-    "      : clamp(1.0 - exp(-(u_fog[1].z * v_depth) * (u_fog[1].z * v_depth)), 0.0, 1.0);\n" +
-    "    color = mix(color, u_fog[0].yzw, f);\n" +
-    "  }\n" +
-    "  // MeshNormalMaterial writes its packed normal as is (no colour space)\n" +
+    // MeshNormalMaterial and MeshDepthMaterial write their values as is (no colour space)
     "  if (mode < 2 && u_tone > 0) color = toneMap(color);\n" +
-    "  o_color = vec4(mode >= 2 ? clamp(color, 0.0, 1.0) : toSrgb(clamp(color, 0.0, 1.0)), alpha);\n" +
+    "  vec3 outc = mode >= 2 ? clamp(color, 0.0, 1.0) : toSrgb(clamp(color, 0.0, 1.0));\n" +
+    // three.js fogs after the colour-space conversion, with the fog colour in sRGB; linear fog is a smoothstep
+    "  if (c4.w > 0.5 && u_fog[0].x > 0.5) {\n" +
+    "    float f = u_fog[0].x < 1.5 ? smoothstep(u_fog[1].x, u_fog[1].y, v_depth)\n" +
+    "      : 1.0 - exp(-u_fog[1].z * u_fog[1].z * v_depth * v_depth);\n" +
+    "    outc = mix(outc, toSrgb(clamp(u_fog[0].yzw, 0.0, 1.0)), f);\n" +
+    "  }\n" +
+    "  o_color = vec4(outc, alpha);\n" +
     "}\n";
 
   var FILTERS = { 1003: 9728, 1004: 9984, 1005: 9986, 1006: 9729, 1007: 9985, 1008: 9987 };
@@ -219,7 +221,7 @@
     if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error("WebGL2 program: " + gl.getProgramInfoLog(prog));
     this.prog = prog;
     var names = ["u_model", "u_view", "u_proj", "u_uvt", "u_instanced", "u_pointSize", "u_pointScale", "u_sizeAtt", "u_mat", "u_lights",
-      "u_nlights", "u_fog", "u_cam", "u_map", "u_hasMap", "u_mapSrgb", "u_points", "u_hasNormal", "u_opaque", "u_tone", "u_exposure", "u_sprite", "u_center", "u_rotation", "u_emap", "u_hasEmap", "u_emapSrgb", "u_euvt"];
+      "u_nlights", "u_fog", "u_cam", "u_map", "u_hasMap", "u_mapSrgb", "u_points", "u_hasNormal", "u_opaque", "u_tone", "u_exposure", "u_sprite", "u_center", "u_rotation", "u_emap", "u_hasEmap", "u_emapSrgb", "u_euvt", "u_dfg"];
     this.u = {};
     for (var i = 0; i < names.length; i++) this.u[names[i]] = gl.getUniformLocation(prog, names[i]);
     this.buffers = new WeakMap();   // attribute -> { buf, version }

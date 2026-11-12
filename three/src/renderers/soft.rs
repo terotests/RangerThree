@@ -57,18 +57,20 @@ pub struct Surface {
 /// A vertex after lighting, in view space. Untextured: `color` is final.
 /// Textured: `color` is the diffuse light times the albedo (the texel
 /// multiplies it), `add` the specular and emissive light and `u`, `v`
-/// the texture coordinates.
+/// the texture coordinates. `fog` is the fog amount (lines and points;
+/// triangles fog per pixel).
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Vert {
     view: Vector3,
     color: Color,
     add: Color,
+    fog: f64,
     u: f64,
     v: f64,
 }
 
 fn vert(view: Vector3, color: Color) -> Vert {
-    Vert { view, color, add: Color::new(0.0, 0.0, 0.0), u: 0.0, v: 0.0 }
+    Vert { view, color, add: Color::new(0.0, 0.0, 0.0), fog: 0.0, u: 0.0, v: 0.0 }
 }
 
 /// Light at a surface point, split so a texture can scale the diffuse part.
@@ -100,9 +102,6 @@ struct Sampler {
     flip_y: bool,
     nearest: bool,
     alpha_test: f64,
-    fog_color: Color,
-    /// fog per pixel from the depth (big triangles fog wrongly per vertex)
-    fog: Option<Fog>,
 }
 
 /// Per-frame state the draw calls share.
@@ -120,7 +119,7 @@ struct Frame {
 
 const DFG_SIZE: i64 = 16;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct SoftRenderer {
     pub width: i64,
     pub height: i64,
@@ -142,6 +141,9 @@ pub struct SoftRenderer {
     cur_tone: i64,
     /// the DFG table, made on first use
     dfg: Vec<f64>,
+    /// the fog of the material being drawn, and the fog colour in sRGB
+    cur_fog: Option<Fog>,
+    fog_srgb: Color,
 }
 
 /// `m` (column-major 3x3, as GLSL's mat3 of column vectors) times `c`.
@@ -251,6 +253,7 @@ fn lerp_vert(a: &Vert, b: &Vert, t: f64) -> Vert {
         view: v,
         color: mix_color(&a.color, &b.color, t),
         add: mix_color(&a.add, &b.add, t),
+        fog: a.fog + (b.fog - a.fog) * t,
         u: a.u + (b.u - a.u) * t,
         v: a.v + (b.v - a.v) * t,
     }
@@ -501,6 +504,8 @@ impl SoftRenderer {
             tone_mapping_exposure: 1.0,
             cur_tone: 0,
             dfg: Vec::new(),
+            cur_fog: None,
+            fog_srgb: Color::new(0.0, 0.0, 0.0),
         };
         r.set_size(width, height);
         r
@@ -577,11 +582,7 @@ impl SoftRenderer {
         -1
     }
 
-    fn sampler_of(&self, material: &Material, frame: &Frame) -> Sampler {
-        let mut fog_color = Color::new(0.0, 0.0, 0.0);
-        if let Some(f) = &frame.fog {
-            fog_color = f.color;
-        }
+    fn sampler_of(&self, material: &Material) -> Sampler {
         let mut s = Sampler {
             slot: -1,
             e: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
@@ -591,12 +592,7 @@ impl SoftRenderer {
             flip_y: false,
             nearest: false,
             alpha_test: material.alpha_test,
-            fog_color,
-            fog: None,
         };
-        if material.fog {
-            s.fog = frame.fog.clone();
-        }
         if let Some(t) = &material.map {
             let tb = t.borrow();
             s.slot = self.texture_slot(tb.id);
@@ -661,6 +657,13 @@ impl SoftRenderer {
         let camera_position = camera.borrow().world_position();
         let objects = descendants(scene);
         let lights = collect_lights(&objects);
+        if let Some(f) = &fog {
+            self.fog_srgb = Color::new(
+                linear_to_srgb(f.color.r.max(0.0).min(1.0)),
+                linear_to_srgb(f.color.g.max(0.0).min(1.0)),
+                linear_to_srgb(f.color.b.max(0.0).min(1.0)),
+            );
+        }
         if self.dfg.is_empty() {
             self.dfg = dfg_table();
         }
@@ -756,6 +759,7 @@ impl SoftRenderer {
         if !material.visible {
             return;
         }
+        self.cur_fog = if material.fog { frame.fog.clone() } else { None };
         self.cur_tone = if material.tone_mapped && material.kind != MaterialKind::MeshNormal && material.kind != MaterialKind::MeshDepth { self.tone_mapping } else { 0 };
         let geometry = data.geometry.borrow();
         let world = ob.matrix_world;
@@ -792,14 +796,32 @@ impl SoftRenderer {
         tone_map(c, self.cur_tone, self.tone_mapping_exposure)
     }
 
-    fn fogged(&self, c: &Color, view_z: f64, frame: &Frame, uses_fog: bool) -> Color {
-        if !uses_fog {
-            return *c;
+    /// The fog amount at view-space z for the material being drawn.
+    fn fog_at(&self, view_z: f64) -> f64 {
+        match &self.cur_fog {
+            Some(f) => f.factor(-view_z),
+            None => 0.0,
         }
-        match &frame.fog {
-            Some(f) => mix_color(c, &f.color, f.factor(-view_z)),
-            None => *c,
+    }
+
+    /// The pixel bytes for linear colour `c`: tone mapped, sRGB encoded,
+    /// then fogged in sRGB as three.js does (fog_fragment comes after
+    /// colorspace_fragment).
+    fn out_bytes(&self, c: &Color, fog: f64) -> Color {
+        let o = self.tone(c);
+        let mut r = linear_to_srgb(o.r.max(0.0).min(1.0));
+        let mut g = linear_to_srgb(o.g.max(0.0).min(1.0));
+        let mut b = linear_to_srgb(o.b.max(0.0).min(1.0));
+        if fog > 0.0 {
+            r += (self.fog_srgb.r - r) * fog;
+            g += (self.fog_srgb.g - g) * fog;
+            b += (self.fog_srgb.b - b) * fog;
         }
+        Color::new(
+            (r * 255.0 + 0.5).floor().max(0.0).min(255.0),
+            (g * 255.0 + 0.5).floor().max(0.0).min(255.0),
+            (b * 255.0 + 0.5).floor().max(0.0).min(255.0),
+        )
     }
 
     fn to_screen(&self, v: &Vector3, frame: &Frame) -> Vector3 {
@@ -835,7 +857,7 @@ impl SoftRenderer {
             base = mul_color(&base, t);
         }
         let opacity = material.opacity;
-        let sampler = self.sampler_of(material, frame);
+        let sampler = self.sampler_of(material);
         let textured = sampler.slot >= 0;
         let uvs = if textured { geometry.get_attribute("uv") } else { None };
         let blend = material.transparent && (opacity < 1.0 || textured);
@@ -876,7 +898,9 @@ impl SoftRenderer {
                 for k in 0..3 {
                     let mut v = wp[k];
                     v.apply_matrix4(&frame.view);
-                    vs.push(vert(v, self.fogged(&base, v.z, frame, material.fog)));
+                    let mut vx = vert(v, base);
+                    vx.fog = self.fog_at(v.z);
+                    vs.push(vx);
                 }
                 for k in 0..3 {
                     let k2 = (k + 1) % 3;
@@ -937,7 +961,7 @@ impl SoftRenderer {
                     verts.push(vert(v, Color::new(d, d, d)));
                 } else {
                     let sum = Color::new(lit.diffuse.r + lit.add.r, lit.diffuse.g + lit.add.g, lit.diffuse.b + lit.add.b);
-                    verts.push(vert(v, self.fogged(&sum, v.z, frame, material.fog)));
+                    verts.push(vert(v, sum));
                 }
             }
             let clipped = clip_near(&verts, -frame.near);
@@ -952,7 +976,7 @@ impl SoftRenderer {
                 if textured {
                     self.fill_textured(&screen[0], &screen[k], &screen[k + 1], &clipped[0], &clipped[k], &clipped[k + 1], &sampler, opacity, blend);
                 } else {
-                    self.fill_triangle(&screen[0], &screen[k], &screen[k + 1], &clipped[0].color, &clipped[k].color, &clipped[k + 1].color, opacity, blend);
+                    self.fill_triangle(&screen[0], &screen[k], &screen[k + 1], &clipped[0], &clipped[k], &clipped[k + 1], opacity, blend);
                 }
             }
             self.triangles += 1;
@@ -988,7 +1012,9 @@ impl SoftRenderer {
                 let v = ca.borrow().get_vector3(id);
                 c = mul_color(&c, &Color::new(v.x, v.y, v.z));
             }
-            verts.push(vert(p, self.fogged(&c, p.z, frame, material.fog)));
+            let mut vx = vert(p, c);
+            vx.fog = self.fog_at(p.z);
+            verts.push(vx);
         }
         let n = verts.len();
         if n < 2 {
@@ -1034,7 +1060,7 @@ impl SoftRenderer {
                 let v = ca.borrow().get_vector3(i);
                 c = mul_color(&c, &Color::new(v.x, v.y, v.z));
             }
-            c = self.fogged(&c, p.z, frame, material.fog);
+            let fog = self.fog_at(p.z);
             let s = self.to_screen(&p, frame);
             let size = if material.size_attenuation { material.size * scale / -p.z } else { material.size };
             // as GL: the pixels whose centres fall in the point's square,
@@ -1046,14 +1072,14 @@ impl SoftRenderer {
             let y1 = (s.y + half - 0.5).ceil() as i64;
             for y in y0.max(0)..y1.min(self.height) {
                 for x in x0.max(0)..x1.min(self.width) {
-                    self.plot(x, y, s.z, &c);
+                    self.plot(x, y, s.z, &c, fog);
                 }
             }
             self.points += 1;
         }
     }
 
-    fn plot(&mut self, x: i64, y: i64, z: f64, c: &Color) {
+    fn plot(&mut self, x: i64, y: i64, z: f64, c: &Color, fog: f64) {
         if x < 0 || y < 0 || x >= self.width || y >= self.height || z < -1.0 || z > 1.0 {
             return;
         }
@@ -1063,10 +1089,10 @@ impl SoftRenderer {
         }
         self.depth[at] = z;
         let p = at * 4;
-        let o = self.tone(c);
-        self.pixels[p] = to_byte(o.r);
-        self.pixels[p + 1] = to_byte(o.g);
-        self.pixels[p + 2] = to_byte(o.b);
+        let o = self.out_bytes(c, fog);
+        self.pixels[p] = o.r;
+        self.pixels[p + 1] = o.g;
+        self.pixels[p + 2] = o.b;
         self.pixels[p + 3] = 255.0;
     }
 
@@ -1096,12 +1122,19 @@ impl SoftRenderer {
             let y = (sa.y + dy * t).floor() as i64;
             let z = sa.z + (sb.z - sa.z) * t - 1e-5;
             let c = mix_color(&a.color, &b.color, t);
-            self.plot(x, y, z, &c);
+            self.plot(x, y, z, &c, a.fog + (b.fog - a.fog) * t);
         }
         self.lines += 1;
     }
 
-    fn fill_triangle(&mut self, a: &Vector3, b: &Vector3, c: &Vector3, ca: &Color, cb: &Color, cc: &Color, opacity: f64, blend: bool) {
+    fn fill_triangle(&mut self, a: &Vector3, b: &Vector3, c: &Vector3, va: &Vert, vb: &Vert, vc: &Vert, opacity: f64, blend: bool) {
+        let ca = va.color;
+        let cb = vb.color;
+        let cc = vc.color;
+        let fogged = self.cur_fog.is_some();
+        let ia = 1.0 / (-va.view.z).max(0.000001);
+        let ib = 1.0 / (-vb.view.z).max(0.000001);
+        let ic = 1.0 / (-vc.view.z).max(0.000001);
         let min_x = a.x.min(b.x).min(c.x).floor().max(0.0) as i64;
         let max_x = a.x.max(b.x).max(c.x).ceil().min(self.width as f64 - 1.0) as i64;
         let min_y = a.y.min(b.y).min(c.y).floor().max(0.0) as i64;
@@ -1124,10 +1157,15 @@ impl SoftRenderer {
                     let at = (y * self.width + x) as usize;
                     if z >= -1.0 && z <= 1.0 && z < self.depth[at] {
                         let p = at * 4;
-                        let o = self.tone(&Color::new(w0 * ca.r + w1 * cb.r + w2 * cc.r, w0 * ca.g + w1 * cb.g + w2 * cc.g, w0 * ca.b + w1 * cb.b + w2 * cc.b));
-                        let r = to_byte(o.r);
-                        let g = to_byte(o.g);
-                        let bl = to_byte(o.b);
+                        let mut fog = 0.0;
+                        if fogged {
+                            // the view depth, perspective-correct
+                            fog = self.fog_at(-1.0 / (w0 * ia + w1 * ib + w2 * ic));
+                        }
+                        let o = self.out_bytes(&Color::new(w0 * ca.r + w1 * cb.r + w2 * cc.r, w0 * ca.g + w1 * cb.g + w2 * cc.g, w0 * ca.b + w1 * cb.b + w2 * cc.b), fog);
+                        let r = o.r;
+                        let g = o.g;
+                        let bl = o.b;
                         if blend {
                             self.pixels[p] = r * opacity + self.pixels[p] * (1.0 - opacity);
                             self.pixels[p + 1] = g * opacity + self.pixels[p + 1] * (1.0 - opacity);
@@ -1254,32 +1292,21 @@ impl SoftRenderer {
                             x += 1;
                             continue;
                         }
-                        let mut fog = 0.0;
-                        if let Some(f) = &s.fog {
-                            fog = f.factor(qs);
-                        }
-                        let mut r = (w0 * va.color.r + w1 * vb.color.r + w2 * vc.color.r) * tr + w0 * va.add.r + w1 * vb.add.r + w2 * vc.add.r;
-                        let mut g = (w0 * va.color.g + w1 * vb.color.g + w2 * vc.color.g) * tg + w0 * va.add.g + w1 * vb.add.g + w2 * vc.add.g;
-                        let mut bl = (w0 * va.color.b + w1 * vb.color.b + w2 * vc.color.b) * tb + w0 * va.add.b + w1 * vb.add.b + w2 * vc.add.b;
-                        if fog > 0.0 {
-                            r += (s.fog_color.r - r) * fog;
-                            g += (s.fog_color.g - g) * fog;
-                            bl += (s.fog_color.b - bl) * fog;
-                        }
-                        let o = self.tone(&Color::new(r, g, bl));
-                        r = o.r;
-                        g = o.g;
-                        bl = o.b;
+                        let fog = self.fog_at(-qs);
+                        let r = (w0 * va.color.r + w1 * vb.color.r + w2 * vc.color.r) * tr + w0 * va.add.r + w1 * vb.add.r + w2 * vc.add.r;
+                        let g = (w0 * va.color.g + w1 * vb.color.g + w2 * vc.color.g) * tg + w0 * va.add.g + w1 * vb.add.g + w2 * vc.add.g;
+                        let bl = (w0 * va.color.b + w1 * vb.color.b + w2 * vc.color.b) * tb + w0 * va.add.b + w1 * vb.add.b + w2 * vc.add.b;
+                        let o = self.out_bytes(&Color::new(r, g, bl), fog);
                         let p = at * 4;
                         if blend {
-                            self.pixels[p] = to_byte(r) * alpha + self.pixels[p] * (1.0 - alpha);
-                            self.pixels[p + 1] = to_byte(g) * alpha + self.pixels[p + 1] * (1.0 - alpha);
-                            self.pixels[p + 2] = to_byte(bl) * alpha + self.pixels[p + 2] * (1.0 - alpha);
+                            self.pixels[p] = o.r * alpha + self.pixels[p] * (1.0 - alpha);
+                            self.pixels[p + 1] = o.g * alpha + self.pixels[p + 1] * (1.0 - alpha);
+                            self.pixels[p + 2] = o.b * alpha + self.pixels[p + 2] * (1.0 - alpha);
                         } else {
                             self.depth[at] = z;
-                            self.pixels[p] = to_byte(r);
-                            self.pixels[p + 1] = to_byte(g);
-                            self.pixels[p + 2] = to_byte(bl);
+                            self.pixels[p] = o.r;
+                            self.pixels[p + 1] = o.g;
+                            self.pixels[p + 2] = o.b;
                         }
                         self.pixels[p + 3] = 255.0;
                     }
