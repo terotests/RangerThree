@@ -25,6 +25,7 @@ function sources() {
     fs.readFileSync(path.join(ROOT, "build/rangerthree-core.js"), "utf8"),
     fs.readFileSync(path.join(ROOT, "js/three.js"), "utf8"),
     fs.readFileSync(path.join(ROOT, "js/three-scene.js"), "utf8"),
+    fs.readFileSync(path.join(ROOT, "js/three-curves.js"), "utf8"),
     fs.readFileSync(path.join(PARITY, "probe-prelude.js"), "utf8"),
   ];
 }
