@@ -19,11 +19,3 @@ version = "0.1.0"
 dependencies = [
  "ranger",
 ]
-
-[[package]]
-name = "scratch"
-version = "0.1.0"
-dependencies = [
- "ranger",
- "rangerthree",
-]
