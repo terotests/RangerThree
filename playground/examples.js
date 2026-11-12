@@ -480,3 +480,94 @@ renderer.setAnimationLoop((t) => {
   renderer.render(scene, camera);
 });`
 });
+
+Object.assign(EXAMPLES, {
+  "Textures: canvas, data and repeat": `
+// Textures made in code (no downloads): a CanvasTexture on the crate,
+// a DataTexture on the globe, a repeating checker floor and an
+// alpha-tested fence. TextureLoader works the same way for image files.
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9fc3e8);
+scene.fog = new THREE.Fog(0x9fc3e8, 12, 40);
+const camera = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 100);
+camera.position.set(0, 3, 9);
+orbit(camera, new THREE.Vector3(0, 1, 0));
+
+function canvasTexture(size, draw) {
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  draw(c.getContext("2d"), size);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// crate: planks, a frame and a label
+const crateTex = canvasTexture(256, (g, s) => {
+  g.fillStyle = "#b07a3c"; g.fillRect(0, 0, s, s);
+  for (let i = 0; i < 8; i++) { g.fillStyle = i % 2 ? "#a06c30" : "#bb8646"; g.fillRect(0, i * 32, s, 30); }
+  g.strokeStyle = "#5a3a18"; g.lineWidth = 22; g.strokeRect(11, 11, s - 22, s - 22);
+  g.beginPath(); g.moveTo(16, 16); g.lineTo(s - 16, s - 16); g.stroke();
+  g.fillStyle = "#fff4dc"; g.font = "bold 40px sans-serif"; g.textAlign = "center";
+  g.fillText("RANGER", s / 2, s / 2 + 14);
+});
+const crate = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial({ map: crateTex, roughness: 0.8 }));
+crate.position.set(-2.4, 1, 0);
+
+// globe: a DataTexture of latitude bands and noise, filtered linearly
+const W = 128, H = 64, data = new Uint8Array(W * H * 4);
+for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+  const lat = Math.abs(y / H - 0.5) * 2;
+  const n = Math.sin(x * 0.31) * Math.cos(y * 0.47) + Math.sin(x * 0.11 + y * 0.2);
+  const land = n > 0.35;
+  const i = (y * W + x) * 4;
+  const ice = lat > 0.82;
+  data[i] = ice ? 240 : land ? 70 + lat * 90 : 20;
+  data[i + 1] = ice ? 245 : land ? 140 - lat * 30 : 80;
+  data[i + 2] = ice ? 250 : land ? 50 : 170;
+  data[i + 3] = 255;
+}
+const globeTex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+globeTex.magFilter = THREE.LinearFilter;
+globeTex.colorSpace = THREE.SRGBColorSpace;
+globeTex.needsUpdate = true;
+const globe = new THREE.Mesh(new THREE.SphereGeometry(1.2, 48, 24), new THREE.MeshPhongMaterial({ map: globeTex, shininess: 40 }));
+globe.position.set(2.4, 1.3, 0);
+
+// floor: one checker tile repeated 12 times each way
+const checker = canvasTexture(64, (g, s) => {
+  g.fillStyle = "#e9e4d8"; g.fillRect(0, 0, s, s);
+  g.fillStyle = "#6b7a8f"; g.fillRect(0, 0, s / 2, s / 2); g.fillRect(s / 2, s / 2, s / 2, s / 2);
+});
+checker.wrapS = checker.wrapT = THREE.RepeatWrapping;
+checker.repeat.set(12, 12);
+checker.magFilter = THREE.NearestFilter;
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshLambertMaterial({ map: checker }));
+floor.rotation.x = -Math.PI / 2;
+
+// fence: transparent holes cut with alphaTest
+const fenceTex = canvasTexture(128, (g, s) => {
+  g.clearRect(0, 0, s, s);
+  g.fillStyle = "#8a6440";
+  for (let x = 6; x < s; x += 30) g.fillRect(x, 10, 16, s - 10);
+  g.fillRect(0, 34, s, 12); g.fillRect(0, 88, s, 12);
+});
+fenceTex.wrapS = THREE.RepeatWrapping;
+fenceTex.repeat.set(4, 1);
+const fence = new THREE.Mesh(new THREE.PlaneGeometry(10, 1.6), new THREE.MeshLambertMaterial({ map: fenceTex, alphaTest: 0.5, side: THREE.DoubleSide }));
+fence.position.set(0, 0.8, -3);
+
+scene.add(crate, globe, floor, fence);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x667755, 1.2));
+const sun = new THREE.DirectionalLight(0xffffff, 2);
+sun.position.set(4, 8, 5);
+scene.add(sun);
+
+renderer.setAnimationLoop((t) => {
+  crate.rotation.y = t / 1600;
+  crate.rotation.x = Math.sin(t / 2200) * 0.3;
+  globe.rotation.y = t / 3000;
+  checker.offset.x = t / 20000;
+  renderer.render(scene, camera);
+});`
+});

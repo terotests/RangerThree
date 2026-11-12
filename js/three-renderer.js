@@ -49,7 +49,55 @@
   P.getClearColor = function (target) { return (target || new T.Color()).copy(this._soft.clear_color); };
   P.setClearAlpha = function (a) { this._soft.clear_alpha = a; };
   P.getClearAlpha = function () { return this._soft.clear_alpha; };
+  // texture pixels: decoded once per texture version and handed to the crate
+  function decodeImage(img, tex) {
+    if (!img) return null;
+    if (img.data && img.width && img.height) {
+      var w = img.width, h = img.height, src = img.data, n = w * h, out = new Uint8ClampedArray(n * 4);
+      var ch = tex.format === 1023 ? 4 : tex.format === 1022 ? 3 : tex.format === 1030 ? 2 : (tex.format === 1028 || tex.format === 1024) ? 1 : Math.max(1, Math.round(src.length / n));
+      var scale = (src instanceof Float32Array || src instanceof Float64Array) ? 255 : 1;
+      for (var i = 0; i < n; i++) {
+        var o = i * 4, s0 = i * ch;
+        var r = src[s0] * scale, g = ch > 2 ? src[s0 + 1] * scale : r, b = ch > 2 ? src[s0 + 2] * scale : r;
+        out[o] = r; out[o + 1] = g; out[o + 2] = b;
+        out[o + 3] = ch === 4 ? src[s0 + 3] * scale : ch === 2 ? src[s0 + 1] * scale : 255;
+      }
+      return { width: w, height: h, data: out };
+    }
+    var iw = img.naturalWidth || img.videoWidth || img.width, ih = img.naturalHeight || img.videoHeight || img.height;
+    if (!iw || !ih || img.complete === false) return null;
+    var c = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(iw, ih) : (typeof document !== "undefined" ? document.createElement("canvas") : null);
+    if (!c) return null;
+    c.width = iw; c.height = ih;
+    var ctx = c.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, iw, ih);
+    return { width: iw, height: ih, data: ctx.getImageData(0, 0, iw, ih).data };
+  }
+  P._uploadTextures = function (scene) {
+    var soft = this._soft, seen = this._seenTextures || (this._seenTextures = {}), count = 0;
+    function upload(tex) {
+      if (!tex || !tex.image) return;
+      var version = tex.version;
+      if (soft.texture_version(tex.id) === version) return;
+      var px = decodeImage(tex.image, tex);
+      if (!px) return;
+      // the crate's Vec<u8> is a byte buffer viewed through a DataView
+      var bytes = px.data, buf = { byteLength: bytes.byteLength, _view: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength) };
+      soft.set_texture_image(tex.id, version, px.width, px.height, buf, tex.colorSpace === "srgb");
+      seen[tex.id] = true;
+    }
+    scene.traverse(function (o) {
+      var m = o.material;
+      if (!m) return;
+      if (Array.isArray(m)) m.forEach(function (x) { upload(x.map); });
+      else upload(m.map);
+    });
+    for (var k in seen) count++;
+    this.info.memory.textures = count;
+  };
   P.render = function (scene, camera) {
+    this._uploadTextures(scene);
     this._soft.render(scene, camera);
     this.info.render.frame++;
     this.info.render.calls = 1;
@@ -82,6 +130,45 @@
   P.compile = function () {};
   P.dispose = function () { this._loop = null; };
   P.forceContextLoss = function () {};
+  // ---- loaders -----------------------------------------------------------
+  function Loader(manager) { this.manager = manager || null; this.crossOrigin = "anonymous"; this.withCredentials = false; this.path = ""; this.resourcePath = ""; this.requestHeader = {}; }
+  Loader.prototype.setPath = function (p) { this.path = p; return this; };
+  Loader.prototype.setResourcePath = function (p) { this.resourcePath = p; return this; };
+  Loader.prototype.setCrossOrigin = function (v) { this.crossOrigin = v; return this; };
+  Loader.prototype.setWithCredentials = function (v) { this.withCredentials = v; return this; };
+  Loader.prototype.setRequestHeader = function (h) { this.requestHeader = h; return this; };
+  Loader.prototype.loadAsync = function (url, onProgress) {
+    var self = this;
+    return new Promise(function (resolve, reject) { self.load(url, resolve, onProgress, reject); });
+  };
+  function ImageLoader(manager) { Loader.call(this, manager); }
+  ImageLoader.prototype = Object.create(Loader.prototype);
+  ImageLoader.prototype.constructor = ImageLoader;
+  ImageLoader.prototype.load = function (url, onLoad, onProgress, onError) {
+    var img = document.createElement("img");
+    if (this.crossOrigin && url.slice(0, 5) !== "data:") img.crossOrigin = this.crossOrigin;
+    img.addEventListener("load", function () { if (onLoad) onLoad(img); });
+    img.addEventListener("error", function (e) { if (onError) onError(e); });
+    img.src = this.path + url;
+    return img;
+  };
+  function TextureLoader(manager) { Loader.call(this, manager); }
+  TextureLoader.prototype = Object.create(Loader.prototype);
+  TextureLoader.prototype.constructor = TextureLoader;
+  TextureLoader.prototype.load = function (url, onLoad, onProgress, onError) {
+    var texture = new T.Texture();
+    var loader = new ImageLoader(this.manager);
+    loader.setCrossOrigin(this.crossOrigin).setPath(this.path);
+    loader.load(url, function (img) {
+      texture.image = img;
+      texture.needsUpdate = true;
+      if (onLoad) onLoad(texture);
+    }, onProgress, onError);
+    return texture;
+  };
+  T.Loader = T.Loader || Loader;
+  T.ImageLoader = T.ImageLoader || ImageLoader;
+  T.TextureLoader = T.TextureLoader || TextureLoader;
   T.WebGLRenderer = WebGLRenderer;
   T.SoftwareRenderer = WebGLRenderer;
 })(THREE, RangerThreeCore);
