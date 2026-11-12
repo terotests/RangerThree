@@ -743,30 +743,35 @@ fn catmull_rom_point(c: &CatmullRomData, t: f64) -> Vector3 {
         v.add(&points[(l - 1) as usize]);
         v
     };
-    let mut px: Vec<f64> = Vec::new();
-    let mut py: Vec<f64> = Vec::new();
-    let mut pz: Vec<f64> = Vec::new();
-    if c.curve_type == CatmullRomType::CatmullRom {
-        px = cubic_poly(p1.x, p2.x, c.tension * (p2.x - p0.x), c.tension * (p3.x - p1.x));
-        py = cubic_poly(p1.y, p2.y, c.tension * (p2.y - p0.y), c.tension * (p3.y - p1.y));
-        pz = cubic_poly(p1.z, p2.z, c.tension * (p2.z - p0.z), c.tension * (p3.z - p1.z));
-    } else {
-        let pow = if c.curve_type == CatmullRomType::Chordal { 0.5 } else { 0.25 };
-        let mut dt0 = p0.distance_to_squared(&p1).powf(pow);
-        let mut dt1 = p1.distance_to_squared(&p2).powf(pow);
-        let mut dt2 = p2.distance_to_squared(&p3).powf(pow);
-        if dt1 < 1e-4 {
-            dt1 = 1.0;
-        }
-        if dt0 < 1e-4 {
-            dt0 = dt1;
-        }
-        if dt2 < 1e-4 {
-            dt2 = dt1;
-        }
-        px = nonuniform_catmull_rom(p0.x, p1.x, p2.x, p3.x, dt0, dt1, dt2);
-        py = nonuniform_catmull_rom(p0.y, p1.y, p2.y, p3.y, dt0, dt1, dt2);
-        pz = nonuniform_catmull_rom(p0.z, p1.z, p2.z, p3.z, dt0, dt1, dt2);
+    let pow = if c.curve_type == CatmullRomType::Chordal { 0.5 } else { 0.25 };
+    let mut dt0 = p0.distance_to_squared(&p1).powf(pow);
+    let mut dt1 = p1.distance_to_squared(&p2).powf(pow);
+    let mut dt2 = p2.distance_to_squared(&p3).powf(pow);
+    if dt1 < 1e-4 {
+        dt1 = 1.0;
     }
+    if dt0 < 1e-4 {
+        dt0 = dt1;
+    }
+    if dt2 < 1e-4 {
+        dt2 = dt1;
+    }
+    let uniform = c.curve_type == CatmullRomType::CatmullRom;
+    let k = c.tension;
+    let px = if uniform {
+        cubic_poly(p1.x, p2.x, k * (p2.x - p0.x), k * (p3.x - p1.x))
+    } else {
+        nonuniform_catmull_rom(p0.x, p1.x, p2.x, p3.x, dt0, dt1, dt2)
+    };
+    let py = if uniform {
+        cubic_poly(p1.y, p2.y, k * (p2.y - p0.y), k * (p3.y - p1.y))
+    } else {
+        nonuniform_catmull_rom(p0.y, p1.y, p2.y, p3.y, dt0, dt1, dt2)
+    };
+    let pz = if uniform {
+        cubic_poly(p1.z, p2.z, k * (p2.z - p0.z), k * (p3.z - p1.z))
+    } else {
+        nonuniform_catmull_rom(p0.z, p1.z, p2.z, p3.z, dt0, dt1, dt2)
+    };
     Vector3::new(poly_at(&px, weight), poly_at(&py, weight), poly_at(&pz, weight))
 }

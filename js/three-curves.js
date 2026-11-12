@@ -280,7 +280,7 @@
       auto_close: p.autoClose === true,
       current_point: p.currentPoint ? v3(p.currentPoint) : R.Vector3.new_(0, 0, 0),
       cache_lengths: old && old.cache_lengths && old.cache_lengths.length === p.curves.length ? old.cache_lengths : [],
-      holes: []
+      holes: (p.holes || []).map(function (h) { return h._core(); })
     });
     return new R.CurveKind_Path(d);
   }
@@ -407,6 +407,89 @@
     LineCurve3: T.LineCurve3, QuadraticBezierCurve: T.QuadraticBezierCurve,
     QuadraticBezierCurve3: T.QuadraticBezierCurve3, SplineCurve: T.SplineCurve
   };
+
+
+  // ---- geometries from curves and from other geometries --------------------
+  var S = R.GeometriesShapes, klass = F.klass;
+  function frenetStruct(f) {
+    return struct(R.FrenetFrames, { tangents: f.tangents.map(v3), normals: f.normals.map(v3), binormals: f.binormals.map(v3) });
+  }
+  function shapeCores(shapes) { return (Array.isArray(shapes) ? shapes : [shapes]).map(function (s) { return s._core(); }); }
+  T.ShapeGeometry = klass(T.BufferGeometry, function (shapes, curveSegments) {
+    if (shapes === undefined) shapes = new T.Shape([new T.Vector2(0, 0.5), new T.Vector2(-0.5, -0.5), new T.Vector2(0.5, -0.5)]);
+    var g = S.shape_geometry(shapeCores(shapes), curveSegments === undefined ? 12 : curveSegments, Array.isArray(shapes));
+    g.id;
+    return g;
+  }, function (shapes) {
+    this.parameters.shapes = shapes === undefined ? null : shapes;
+  });
+  // options as three.js names them; a UVGenerator other than the world one is not supported
+  function extrudeOptions(options) {
+    var o = R.ExtrudeOptions.new_();
+    if (options.curveSegments !== undefined) o.curve_segments = options.curveSegments;
+    if (options.steps !== undefined) o.steps = options.steps;
+    if (options.depth !== undefined) o.depth = options.depth;
+    if (options.bevelEnabled !== undefined) o.bevel_enabled = options.bevelEnabled;
+    if (options.bevelThickness !== undefined) o.bevel_thickness = options.bevelThickness;
+    o.bevel_size = options.bevelSize !== undefined ? options.bevelSize : o.bevel_thickness - 0.1;
+    if (options.bevelOffset !== undefined) o.bevel_offset = options.bevelOffset;
+    if (options.bevelSegments !== undefined) o.bevel_segments = options.bevelSegments;
+    if (options.UVGenerator !== undefined) console.warn("THREE.ExtrudeGeometry: only the world UV generator is supported");
+    var path = options.extrudePath;
+    if (path) {
+      var closed = path.isCatmullRomCurve3 ? path.closed === true : false;
+      if (!path._custom()) o.extrude_along(path._core(), closed);
+      else {
+        o.extrude_by_path = true;
+        o.path_points = path.getSpacedPoints(o.steps).map(v3);
+        o.path_frames = frenetStruct(path.computeFrenetFrames(o.steps, closed));
+      }
+    }
+    return o;
+  }
+  T.ExtrudeGeometry = klass(T.BufferGeometry, function (shapes, options) {
+    if (shapes === undefined) shapes = new T.Shape([new T.Vector2(0.5, 0.5), new T.Vector2(-0.5, 0.5), new T.Vector2(-0.5, -0.5), new T.Vector2(0.5, -0.5)]);
+    var g = S.extrude_geometry(shapeCores(shapes), extrudeOptions(options || {}));
+    g.id;
+    return g;
+  }, function (shapes, options) {
+    this.parameters.shapes = shapes === undefined ? null : shapes;
+    this.parameters.options = options || {};
+  });
+  T.TubeGeometry = klass(T.BufferGeometry, function (path, tubularSegments, radius, radialSegments, closed) {
+    if (path === undefined) path = new T.QuadraticBezierCurve3(new T.Vector3(-1, -1, 0), new T.Vector3(-1, 1, 0), new T.Vector3(1, 1, 0));
+    var segs = tubularSegments === undefined ? 64 : tubularSegments;
+    closed = closed === true;
+    var frames = path.computeFrenetFrames(segs, closed);
+    var points = [];
+    for (var i = 0; i <= segs; i++) points.push(v3(path.getPointAt(i / segs)));
+    var g = S.tube_from_frames(points, frenetStruct(frames), segs, radius === undefined ? 1 : radius,
+      radialSegments === undefined ? 8 : radialSegments, closed);
+    g.id;
+    def(g, "__frames", frames);
+    return g;
+  }, function (path, tubularSegments, radius, radialSegments, closed) {
+    this.parameters.path = path === undefined ? null : path;
+    this.parameters.closed = closed === true;
+    this.tangents = this.__frames.tangents;
+    this.normals = this.__frames.normals;
+    this.binormals = this.__frames.binormals;
+  });
+  T.EdgesGeometry = klass(T.BufferGeometry, function (geometry, thresholdAngle) {
+    var t = thresholdAngle === undefined ? 1 : thresholdAngle;
+    var g;
+    if (geometry) g = S.edges_geometry(geometry, t);
+    else { g = R.BufferGeometry.new_(); g.type_name = "EdgesGeometry"; g.parameters.put("thresholdAngle", t); }
+    g.id;
+    return g;
+  }, function (geometry) { this.parameters.geometry = geometry || null; });
+  T.WireframeGeometry = klass(T.BufferGeometry, function (geometry) {
+    var g;
+    if (geometry) g = S.wireframe_geometry(geometry);
+    else { g = R.BufferGeometry.new_(); g.type_name = "WireframeGeometry"; }
+    g.id;
+    return g;
+  }, function (geometry) { this.parameters.geometry = geometry || null; });
 
   // ---- ShapeUtils / Earcut -----------------------------------------------
   function v2(v) { return R.Vector2.new_(v.x, v.y); }

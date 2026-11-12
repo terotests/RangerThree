@@ -1411,4 +1411,5 @@
     def(p, "disconnect", function () { def(this, "_doc", null); });
     def(p, "dispose", function () { def(this, "_doc", null); });
   })();
+  F.klass = klass;
 })(THREE, RangerThreeCore);
