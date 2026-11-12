@@ -1,7 +1,7 @@
 {
   "ranger": {
     "git": "https://github.com/terotests/Ranger.git",
-    "rev": "72d4b008a34789f7e4ab92f04dde2d83677ed8a8"
+    "rev": "64458b48fed828fcfb776aa3898cbdb5156bf55f"
   },
   "componentengine": {
     "git": "https://github.com/terotests/componentengine.git",
