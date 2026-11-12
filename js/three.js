@@ -33,9 +33,13 @@ var THREE = (function (R) {
     Object.defineProperty(obj, name, { get: get, set: set, configurable: true, enumerable: false });
   }
   // camelCase names for a core class's snake_case methods and statics
+  // three.js's isX names are boolean flags (`if (o.isCamera)`), so a crate
+  // is_x method gets a camelCase alias only where three.js has that method
+  var IS_METHODS = { is_empty: 1, is_enabled: 1, is_front_facing: 1 };
   function aliases(C) {
     var p = C.prototype;
     Object.getOwnPropertyNames(p).forEach(function (k) {
+      if (k.slice(0, 3) === "is_" && !IS_METHODS[k]) return;
       if (k.indexOf("_") > 0 && k.slice(0, 3) !== "rs_") {
         var d = Object.getOwnPropertyDescriptor(p, k);
         if (typeof d.value !== "function") return;
