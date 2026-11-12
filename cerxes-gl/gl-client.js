@@ -50,10 +50,15 @@ var __cerxesGL = (function () {
     var c = [name, 0];
     for (var i = 0; i < args.length; i++) c.push(enc(args[i]));
     stats.syncs++;
-    return JSON.parse(__hostSync("Q" + JSON.stringify(c)));
+    var r = JSON.parse(__hostSync("Q" + JSON.stringify(c)));
+    if (r && typeof r === "object" && r.__t) return r.__t === "Array" ? r.d : new globalThis[r.__t](r.d);
+    if (r && typeof r === "object" && r.__h !== undefined) return new Handle(r.__h, "");
+    return r;
   }
   var SYNC = { getParameter: 1, getShaderParameter: 1, getProgramParameter: 1, getShaderInfoLog: 1, getProgramInfoLog: 1,
-    getError: 1, getAttribLocation: 1, checkFramebufferStatus: 1, getSupportedExtensions: 1, isContextLost: 1, getContextAttributes: 1 };
+    getError: 1, getAttribLocation: 1, checkFramebufferStatus: 1, getSupportedExtensions: 1, isContextLost: 1, getContextAttributes: 1,
+    getShaderPrecisionFormat: 1, getActiveUniform: 1, getActiveAttrib: 1, getUniformBlockIndex: 1, getActiveUniformBlockParameter: 1,
+    getFragDataLocation: 1, getActiveUniforms: 1, getInternalformatParameter: 1, getProgramParameter: 1, getBufferParameter: 1 };
   function Context(canvas) {
     this.canvas = canvas;
     this.drawingBufferWidth = canvas._w;

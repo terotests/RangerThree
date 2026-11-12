@@ -37,6 +37,19 @@ export function makeGLHost(gl) {
     if (ret) objs[ret] = r;
     return r;
   }
+  // an answer as JSON: typed arrays tagged, info objects as plain fields
+  function plain(r) {
+    if (r === undefined || r === null) return null;
+    if (ArrayBuffer.isView(r)) return { __t: r.constructor.name, d: Array.from(r) };
+    if (Array.isArray(r)) return r;
+    if (typeof r === "object") {
+      if (typeof WebGLActiveInfo !== "undefined" && r instanceof WebGLActiveInfo) return { name: r.name, size: r.size, type: r.type };
+      if (typeof WebGLShaderPrecisionFormat !== "undefined" && r instanceof WebGLShaderPrecisionFormat) return { rangeMin: r.rangeMin, rangeMax: r.rangeMax, precision: r.precision };
+      const k = objs.indexOf(r);
+      return k > 0 ? { __h: k } : {};
+    }
+    return r;
+  }
   function answer(text) {
     const kind = text[0];
     stats.bytes += text.length;
@@ -50,7 +63,7 @@ export function makeGLHost(gl) {
     } else if (kind === "Q") {
       stats.syncs++;
       const r = play(JSON.parse(text.slice(1)));
-      out = JSON.stringify(r === undefined ? null : r);
+      out = JSON.stringify(plain(r));
     }
     stats.playMs += performance.now() - t0;
     return out;

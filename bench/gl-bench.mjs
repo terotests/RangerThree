@@ -5,6 +5,8 @@
 //               WebGL2 through the GL bridge (cerxes-gl/gl-client.js ->
 //               __hostSync -> gl-host.js -> the canvas's context)
 //   cerxes-jit  as cerxes, with CErXes's baseline JIT
+//   three       the original three.js r185 (tmp/three-ref) in the page's engine
+//   cerxes-three the original three.js in CErXes over the GL bridge
 // Every frame ends with a 1-pixel readPixels so the GPU's work is counted;
 // `script` is the frame's call alone (the engine's work and the GL calls
 // issued, before the GPU finishes).
@@ -24,8 +26,11 @@ const ctx = {};
 vm.runInNewContext(fs.readFileSync(path.join(ROOT, "playground/examples.js"), "utf8") + ";this.EXAMPLES=EXAMPLES;", ctx);
 const LIB = ["build/rangerthree-core.js", "js/three.js", "js/three-scene.js", "js/three-curves.js", "js/three-renderer.js", "js/three-webgl.js"]
   .map((f) => fs.readFileSync(path.join(ROOT, f), "utf8")).join("\n;\n");
+// the original three.js r185 (parity/tools/fetch-three.sh), modes three / cerxes-three
+const THREE_REF = path.join(ROOT, "tmp/three-ref/three/build/three.cjs");
+const THREE_LIB = fs.existsSync(THREE_REF) ? "var module = { exports: {} }, exports = module.exports;\n" + fs.readFileSync(THREE_REF, "utf8") + "\n;var THREE = module.exports;" : "";
 const CLIENT = fs.readFileSync(path.join(ROOT, "cerxes-gl/gl-client.js"), "utf8");
-function sceneScript(code, cerxes) {
+function sceneScript(code, cerxes, orig) {
   return `${cerxes ? CLIENT : ""}
 var renderer = new THREE.WebGLRenderer({ canvas: ${cerxes ? `__cerxesGL.canvas(${W}, ${H})` : "document.getElementById('c')"}, antialias: false });
 renderer.setSize(${W}, ${H}, false);
@@ -35,7 +40,7 @@ function orbit(camera, target) { camera.lookAt(target); }
 (function () {
 ${code}
 })();
-function __frame(t) { __loop(+t); ${cerxes ? "__cerxesGL.flush();" : ""} return renderer.backend; }
+function __frame(t) { __loop(+t); ${cerxes ? "__cerxesGL.flush();" : ""} return ${orig ? '"three.js"' : "renderer.backend"}; }
 `;
 }
 const PAGE = `<!doctype html><canvas id="c" width="${W}" height="${H}"></canvas><script type="module">
@@ -94,8 +99,10 @@ for (const name of SCENES) {
     });
     await page.goto("http://bench.local/");
     await page.waitForFunction(() => window.ready);
-    const r = await page.evaluate(([m, lib, sc, f]) => window.runBench(m, lib, sc, f), [mode, LIB, sceneScript(ctx.EXAMPLES[name], mode !== "v8"), +FRAMES]);
+    const orig = mode === "three" || mode === "cerxes-three";
+    const r = await page.evaluate(([m, lib, sc, f]) => window.runBench(m, lib, sc, f), [orig ? (mode === "three" ? "v8" : "cerxes") : mode, orig ? THREE_LIB : LIB, sceneScript(ctx.EXAMPLES[name], mode.startsWith("cerxes"), orig), +FRAMES]);
     rows.push({ scene: name, mode, ...r });
+    if (process.env.PNG) { fs.mkdirSync(process.env.PNG, { recursive: true }); await page.locator("#c").screenshot({ path: path.join(process.env.PNG, name.replace(/\W+/g, "_") + "-" + mode + ".png") }); }
     console.log(`${name.slice(0, 12).padEnd(12)} ${mode.padEnd(10)} ${r.backend.padEnd(8)} median ${String(r.median).padStart(7)} ms, script ${String(r.medianCpu).padStart(6)} ms (host GL ${String(r.medianHost).padStart(6)} ms)  mean ${String(r.mean).padStart(7)}  setup ${String(r.setup).padStart(7)} ms  wasm ${r.wasmMB} MB  sum ${r.checksum} ${r.bridge ? JSON.stringify(r.bridge) : ""}`);
     if (r.out) console.log("   out: " + r.out);
     await page.close();

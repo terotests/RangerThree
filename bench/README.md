@@ -37,6 +37,11 @@ RangerThree's own `js/three-webgl.js` runs unchanged on it.
       cargo build --release --target wasm32-wasip1 --features wjit)
     node bench/gl-bench.mjs 320 240 60
 
+Modes `three` and `cerxes-three` run the original three.js r185
+(`bash parity/tools/fetch-three.sh` puts it in tmp/three-ref, test-only) on
+the same scenes, in the page's V8 and in CErXes over the same bridge.
+`PNG=dir` saves each mode's last frame.
+
 Headless Chromium (SwiftShader). Results: `bench/gl-results.json`.
 `cerxes-gl/` links CErXes, so its Rust crate is AGPL-3.0-or-later like
 CErXes; the JavaScript is MIT.
