@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RangerThree playground</title>
+<style>
+  :root { --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5d6677; --line: #d9dde5; --accent: #2f6fde; --code: #fbfbfd; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #14171d; --panel: #1c2028; --text: #e4e7ee; --muted: #9aa3b4; --line: #2c323d; --accent: #6d9cf0; --code: #171a21; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .note { color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 16px; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px; border-bottom: 1px solid var(--line); }
+  select, button { font: inherit; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  button.run { background: var(--accent); color: #fff; border-color: var(--accent); }
+  textarea { flex: 1; min-height: 420px; border: 0; padding: 12px; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; background: var(--code); color: var(--text); resize: vertical; tab-size: 2; }
+  canvas { display: block; width: 100%; height: auto; background: #000; image-rendering: auto; }
+  #status { padding: 8px 12px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); white-space: pre-wrap; min-height: 2.5em; }
+  #status.err { color: #d0453c; }
+</style>
+</head>
+<body>
+<header>
+  <h1>RangerThree playground</h1>
+  <span class="note">three.js API from Rust (compiled to JavaScript by Ranger), drawn by the crate's software renderer</span>
+</header>
+<main>
+  <section class="panel">
+    <div class="bar">
+      <label for="example">Example</label>
+      <select id="example"></select>
+      <button class="run" id="run">Run (Ctrl+Enter)</button>
+    </div>
+    <textarea id="code" spellcheck="false" aria-label="Code"></textarea>
+  </section>
+  <section class="panel">
+    <canvas id="view" width="640" height="480" aria-label="Rendered scene"></canvas>
+    <div id="status" role="status"></div>
+  </section>
+</main>
+<script src="rangerthree-core.js"></script>
+<script src="three.js"></script>
+<script src="three-scene.js"></script>
+<script src="three-curves.js"></script>
+<script src="three-renderer.js"></script>
+<script src="examples.js"></script>
+<script>
+(function () {
+  var sel = document.getElementById("example"), code = document.getElementById("code");
+  var canvas = document.getElementById("view"), status = document.getElementById("status");
+  var current = null;
+  Object.keys(EXAMPLES).forEach(function (k) { var o = document.createElement("option"); o.value = k; o.textContent = k; sel.appendChild(o); });
+  function load(name) { code.value = EXAMPLES[name].trim() + "\n"; run(); }
+  function run() {
+    if (current) current.setAnimationLoop(null);
+    status.className = ""; status.textContent = "";
+    var renderer = new THREE.WebGLRenderer({ canvas: canvas });
+    renderer.setSize(canvas.clientWidth || 640, Math.round((canvas.clientWidth || 640) * 0.75), false);
+    current = renderer;
+    var frames = 0, t0 = performance.now();
+    var wrapped = renderer.render.bind(renderer);
+    renderer.render = function (s, c) {
+      wrapped(s, c); frames++;
+      var dt = performance.now() - t0;
+      if (dt > 1000) { status.textContent = (frames * 1000 / dt).toFixed(1) + " fps, " + renderer.info.render.triangles + " triangles"; frames = 0; t0 = performance.now(); }
+      else if (frames === 1) status.textContent = renderer.info.render.triangles + " triangles";
+    };
+    try { new Function("THREE", "renderer", "canvas", code.value)(THREE, renderer, canvas); }
+    catch (e) { status.className = "err"; status.textContent = String(e && e.stack || e); }
+  }
+  sel.onchange = function () { load(sel.value); };
+  document.getElementById("run").onclick = run;
+  code.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); }
+    if (e.key === "Tab") { e.preventDefault(); var s = code.selectionStart; code.setRangeText("  ", s, code.selectionEnd, "end"); }
+  });
+  load(Object.keys(EXAMPLES)[0]);
+})();
+</script>
+</body>
+</html>

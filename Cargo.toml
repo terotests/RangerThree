@@ -1,4 +1,4 @@
 [workspace]
 resolver = "2"
-members = ["three", "scratch"]
-exclude = [".deps"]
+members = ["three"]
+exclude = [".deps", "scratch"]

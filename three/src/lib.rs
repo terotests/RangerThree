@@ -8,6 +8,7 @@ pub mod core;
 pub mod extras;
 pub mod geometries;
 pub mod materials;
+pub mod renderers;
 pub mod maths;
 pub mod scenes;
 pub mod textures;

@@ -1,0 +1,3 @@
+//! Renderers.
+
+pub mod soft;

@@ -1,0 +1,54 @@
+# Builds the three crate (cargo and Ranger -> JavaScript), runs the
+# comparisons against three.js, and publishes the playground to GitHub Pages.
+name: playground
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Ranger at the pinned commit, crate as JavaScript, playground site
+        run: bash scripts/build-playground.sh
+      - name: cargo build
+        run: cargo build --workspace
+      - name: Reference three.js (test only)
+        run: bash parity/tools/fetch-three.sh
+      - name: Geometries and earcut against three.js
+        run: |
+          node tests/geometry-compare.mjs
+          node tests/earcut-compare.mjs
+      - name: Value parity
+        run: node parity/value.mjs > value.txt || true; head -2 value.txt
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
