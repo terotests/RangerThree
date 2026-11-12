@@ -15,6 +15,8 @@ use crate::maths::color::{linear_to_srgb, srgb_to_linear, Color, ColorSpace};
 use crate::maths::matrix3::Matrix3;
 use crate::maths::matrix4::Matrix4;
 use crate::maths::vector3::Vector3;
+use crate::renderers::dfg_table::dfg_table;
+use crate::renderers::pbr::brdf_ggx_multiscatter;
 use crate::scenes::fog::Fog;
 use crate::textures::texture::{Image, Texture, CLAMP_TO_EDGE_WRAPPING, MIRRORED_REPEAT_WRAPPING, NEAREST_FILTER, REPEAT_WRAPPING, UV_MAPPING};
 
@@ -46,6 +48,10 @@ pub struct Surface {
     pub diffuse_scale: f64,
     pub lit: bool,
     pub specular_on: bool,
+    /// Standard/Physical: GGX specular from `roughness` and `metalness`
+    pub physical: bool,
+    pub roughness: f64,
+    pub metalness: f64,
 }
 
 /// A vertex after lighting, in view space. Untextured: `color` is final.
@@ -108,7 +114,11 @@ struct Frame {
     camera_position: Vector3,
     lights: Vec<LightIn>,
     fog: Option<Fog>,
+    /// the DFG table for Standard/Physical materials (`DFG_SIZE` squared pairs)
+    dfg: Vec<f64>,
 }
+
+const DFG_SIZE: i64 = 16;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SoftRenderer {
@@ -130,6 +140,8 @@ pub struct SoftRenderer {
     pub tone_mapping_exposure: f64,
     /// the tone mapping of the material being drawn
     cur_tone: i64,
+    /// the DFG table, made on first use
+    dfg: Vec<f64>,
 }
 
 /// `m` (column-major 3x3, as GLSL's mat3 of column vectors) times `c`.
@@ -308,7 +320,9 @@ pub fn surface_of(m: &Material) -> Surface {
     }
     let mut emissive = m.emissive;
     emissive = Color::new(emissive.r * m.emissive_intensity, emissive.g * m.emissive_intensity, emissive.b * m.emissive_intensity);
-    Surface { kind: m.kind, color: m.color, emissive, specular, shininess, diffuse_scale, lit, specular_on }
+    let physical = m.kind == MaterialKind::MeshStandard || m.kind == MaterialKind::MeshPhysical;
+    let roughness = m.roughness.max(0.0525).min(1.0);
+    Surface { kind: m.kind, color: m.color, emissive, specular, shininess, diffuse_scale, lit, specular_on, physical, roughness, metalness: m.metalness }
 }
 
 /// The light at a surface point `at` (world) with normal `n` (world),
@@ -335,6 +349,9 @@ fn shade_parts(s: &Surface, albedo: &Color, n: &Vector3, at: &Vector3, frame: &F
     let mut sr = 0.0;
     let mut sg = 0.0;
     let mut sb = 0.0;
+    let mut pr = 0.0;
+    let mut pg = 0.0;
+    let mut pb = 0.0;
     for l in frame.lights.iter() {
         let mut c = l.color;
         let mut k = 1.0;
@@ -374,7 +391,15 @@ fn shade_parts(s: &Surface, albedo: &Color, n: &Vector3, at: &Vector3, frame: &F
             if s.kind == MaterialKind::MeshToon {
                 diffuse = if nl > 0.5 { 1.0 } else if nl > 0.0 { 0.5 } else { 0.0 };
             }
-            if s.specular_on && nl > 0.0 {
+            if s.physical && nl > 0.0 {
+                // three.js's RE_Direct_Physical: irradiance * BRDF_GGX_Multiscatter
+                let f0 = mix_color(&Color::new(0.04, 0.04, 0.04), albedo, s.metalness);
+                let brdf = brdf_ggx_multiscatter(&dir, &to_eye, n, &f0, s.roughness, &frame.dfg, DFG_SIZE);
+                let e = l.intensity * k * nl;
+                pr += c.r * e * brdf.r;
+                pg += c.g * e * brdf.g;
+                pb += c.b * e * brdf.b;
+            } else if s.specular_on && nl > 0.0 {
                 let mut h = dir;
                 h.add(&to_eye);
                 h.normalize();
@@ -396,9 +421,9 @@ fn shade_parts(s: &Surface, albedo: &Color, n: &Vector3, at: &Vector3, frame: &F
     Lit {
         diffuse: Color::new(albedo.r * r * d, albedo.g * g * d, albedo.b * b * d),
         add: Color::new(
-            s.specular.r * sr + s.emissive.r,
-            s.specular.g * sg + s.emissive.g,
-            s.specular.b * sb + s.emissive.b,
+            s.specular.r * sr + pr + s.emissive.r,
+            s.specular.g * sg + pg + s.emissive.g,
+            s.specular.b * sb + pb + s.emissive.b,
         ),
     }
 }
@@ -475,6 +500,7 @@ impl SoftRenderer {
             tone_mapping: 0,
             tone_mapping_exposure: 1.0,
             cur_tone: 0,
+            dfg: Vec::new(),
         };
         r.set_size(width, height);
         r
@@ -635,7 +661,11 @@ impl SoftRenderer {
         let camera_position = camera.borrow().world_position();
         let objects = descendants(scene);
         let lights = collect_lights(&objects);
-        let frame = Frame { view, projection, near, camera_position, lights, fog };
+        if self.dfg.is_empty() {
+            self.dfg = dfg_table();
+        }
+        let dfg = self.dfg.clone();
+        let frame = Frame { view, projection, near, camera_position, lights, fog, dfg };
         // opaque first, then transparent ones back to front
         let mut transparent: Vec<ObjectRef> = Vec::new();
         for o in objects.iter() {

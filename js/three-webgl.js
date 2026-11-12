@@ -58,7 +58,8 @@
     "uniform sampler2D u_emap;\n" +
     "uniform int u_hasEmap, u_emapSrgb;\n" +
     "uniform mat3 u_euvt;\n" +
-    "uniform vec4 u_mat[5];\n" +
+    "uniform vec4 u_mat[6];\n" +
+    "uniform sampler2D u_dfg;\n" +
     "uniform vec4 u_lights[" + (MAX_LIGHTS * 5) + "];\n" +
     "uniform int u_nlights;\n" +
     "uniform vec4 u_fog[2];\n" +
@@ -102,7 +103,7 @@
     "  return c;\n" +
     "}\n" +
     "void main() {\n" +
-    "  vec4 c0 = u_mat[0], c1 = u_mat[1], c2 = u_mat[2], c3 = u_mat[3], c4 = u_mat[4];\n" +
+    "  vec4 c0 = u_mat[0], c1 = u_mat[1], c2 = u_mat[2], c3 = u_mat[3], c4 = u_mat[4], c5 = u_mat[5];\n" +
     "  int mode = int(c3.w + 0.5);\n" +
     "  vec3 albedo = c0.rgb * v_color;\n" +
     "  float alpha = c0.a;\n" +
@@ -131,7 +132,14 @@
     "    color = albedo;\n" +
     "  } else {\n" +
     "    vec3 toEye = normalize(u_cam - v_world);\n" +
-    "    vec3 dif = vec3(0.0), spec = vec3(0.0);\n" +
+    "    vec3 dif = vec3(0.0), spec = vec3(0.0), pspec = vec3(0.0);\n" +
+    // Standard/Physical (three.js lights_physical_fragment): roughness widened by the normal's screen-space change
+    "    bool physical = c5.z > 0.5;\n" +
+    "    float rough = c5.x;\n" +
+    "    if (physical) { vec3 dxy = max(abs(dFdx(v_normal)), abs(dFdy(v_normal))); rough = min(rough + max(max(dxy.x, dxy.y), dxy.z), 1.0); }\n" +
+    "    vec3 f0 = mix(vec3(0.04), albedo, c5.y);\n" +
+    "    float nv = clamp(dot(n, toEye), 0.0, 1.0);\n" +
+    "    vec2 dfgV = texture(u_dfg, vec2(rough, nv)).rg;\n" +
     "    for (int i = 0; i < " + MAX_LIGHTS + "; i++) {\n" +
     "      if (i >= u_nlights) break;\n" +
     "      vec4 l0 = u_lights[i * 5], l1 = u_lights[i * 5 + 1], l2 = u_lights[i * 5 + 2], l3 = u_lights[i * 5 + 3], l4 = u_lights[i * 5 + 4];\n" +
@@ -155,7 +163,22 @@
     "        float nl = dot(n, dir);\n" +
     "        diffuse = max(nl, 0.0);\n" +
     "        if (mode == 1) diffuse = nl > 0.5 ? 1.0 : (nl > 0.0 ? 0.5 : 0.0);\n" +
-    "        if (c3.z > 0.5 && nl > 0.0) {\n" +
+    "        if (physical && nl > 0.0) {\n" +
+    "          vec3 h = normalize(dir + toEye);\n" +
+    "          float a = rough * rough, a2 = a * a;\n" +
+    "          float nlc = clamp(nl, 0.0, 1.0), nh = clamp(dot(n, h), 0.0, 1.0), vh = clamp(dot(toEye, h), 0.0, 1.0);\n" +
+    "          float fr = exp2((-5.55473 * vh - 6.98316) * vh);\n" +
+    "          vec3 F = f0 * (1.0 - fr) + fr;\n" +
+    "          float gv = nlc * sqrt(a2 + (1.0 - a2) * nv * nv), gl = nv * sqrt(a2 + (1.0 - a2) * nlc * nlc);\n" +
+    "          float V = 0.5 / max(gv + gl, 1e-6);\n" +
+    "          float dd = nh * nh * (a2 - 1.0) + 1.0; float D = 0.3183098862 * a2 / (dd * dd);\n" +
+    "          vec2 dfgL = texture(u_dfg, vec2(rough, nlc)).rg;\n" +
+    "          vec3 fssV = f0 * dfgV.x + dfgV.y, fssL = f0 * dfgL.x + dfgL.y;\n" +
+    "          float emsV = 1.0 - (dfgV.x + dfgV.y), emsL = 1.0 - (dfgL.x + dfgL.y);\n" +
+    "          vec3 favg = f0 + (1.0 - f0) * 0.047619;\n" +
+    "          vec3 fms = fssV * fssL * favg / (1.0 - emsV * emsL * favg + 1e-6);\n" +
+    "          pspec += c * (l1.w * k * nlc) * (F * (V * D) + fms * emsV * emsL);\n" +
+    "        } else if (c3.z > 0.5 && nl > 0.0) {\n" +
     "          vec3 h = normalize(dir + toEye);\n" +
     "          float s = pow(max(dot(n, h), 0.0), c2.w) * (c2.w + 2.0) / 8.0 * 0.3183098862;\n" +
     "          spec += c * (l1.w * k * s * nl);\n" +
@@ -163,7 +186,7 @@
     "      }\n" +
     "      dif += c * (l1.w * k * diffuse * 0.3183098862);\n" +
     "    }\n" +
-    "    color = albedo * dif * c3.x + c2.rgb * spec + emissive;\n" +
+    "    color = albedo * dif * c3.x + c2.rgb * spec + pspec + emissive;\n" +
     "  }\n" +
     "  if (c4.w > 0.5 && u_fog[0].x > 0.5) {\n" +
     "    float f = u_fog[0].x < 1.5 ? (u_fog[1].y == u_fog[1].x ? step(u_fog[1].y, v_depth) : clamp((v_depth - u_fog[1].x) / (u_fog[1].y - u_fog[1].x), 0.0, 1.0))\n" +
@@ -205,6 +228,15 @@
     this.vao = gl.createVertexArray();
     this.lightData = new Float32Array(MAX_LIGHTS * 20);
     this.textureCount = 0;
+    // the DFG table for Standard/Physical lighting (renderers/dfg_table.rs)
+    this.dfg = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.dfg);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG16F, 16, 16, 0, gl.RG, gl.FLOAT, Float32Array.from(R.RenderersDfgTable.dfg_table()));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   }
   var B = Backend.prototype;
 
@@ -315,6 +347,10 @@
     this.tone = r.toneMapping | 0;
     gl.uniform1i(u.u_map, 0);
     gl.uniform1i(u.u_emap, 1);
+    gl.uniform1i(u.u_dfg, 2);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.dfg);
+    gl.activeTexture(gl.TEXTURE0);
     gl.activeTexture(gl.TEXTURE0);
     var info = { triangles: 0, lines: 0, points: 0, calls: 0 };
     for (var k = 0; k < plan.items.length; k++) this.draw(plan.items[k], info);

@@ -20,7 +20,7 @@ use crate::textures::texture::UV_MAPPING;
 /// Floats per light in `RenderPlan::lights` (five vec4s).
 pub const LIGHT_STRIDE: i64 = 20;
 /// Floats per material in `material_uniforms` (five vec4s).
-pub const MATERIAL_STRIDE: i64 = 20;
+pub const MATERIAL_STRIDE: i64 = 24;
 
 /// One object to draw.
 #[derive(Clone)]
@@ -197,7 +197,8 @@ pub fn plan_frame(scene: &ObjectRef, camera: &ObjectRef, clear_color: &Color, cl
 /// A material's shading inputs as `MATERIAL_STRIDE` floats:
 /// color.rgb, opacity | emissive.rgb, alpha_test |
 /// specular.rgb, shininess | diffuse_scale, lit, specular_on, mode |
-/// side (0 front, 1 back, 2 double), flat, vertex_colors, fog.
+/// side (0 front, 1 back, 2 double), flat, vertex_colors, fog |
+/// roughness (clamped as three.js), metalness, physical (GGX), 0.
 /// mode: 0 plain, 1 toon, 2 normal, 3 depth.
 pub fn material_uniforms(m: &Material) -> Vec<f64> {
     let s = surface_of(m);
@@ -236,6 +237,10 @@ pub fn material_uniforms(m: &Material) -> Vec<f64> {
         if m.flat_shading { 1.0 } else { 0.0 },
         if m.vertex_colors { 1.0 } else { 0.0 },
         if m.fog { 1.0 } else { 0.0 },
+        s.roughness,
+        s.metalness,
+        if s.physical { 1.0 } else { 0.0 },
+        0.0,
     ]
 }
 
