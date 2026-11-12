@@ -95,6 +95,29 @@
     "  gl_PointSize = max(1.0, u_sizeAtt == 1 ? u_pointSize * u_pointScale / max(-vp.z, 1e-4) : u_pointSize);\n" +
     "}\n";
   // the fragment shader after its #version line and SHADOW_TYPE (1 PCF, 2 basic, 3 VSM)
+  // the faces of the prefiltered environment: 3 x 2 cube faces per level, one-texel border (three.js's cube_uv_reflection)
+  var CUBE_UV = "" +
+    "float faceOf(vec3 d) { vec3 a = abs(d); if (a.x > a.z) return a.x > a.y ? (d.x > 0.0 ? 0.0 : 3.0) : (d.y > 0.0 ? 1.0 : 4.0); return a.z > a.y ? (d.z > 0.0 ? 2.0 : 5.0) : (d.y > 0.0 ? 1.0 : 4.0); }\n" +
+    "vec2 faceUv(vec3 d, float f) {\n" +
+    "  vec2 uv;\n" +
+    "  if (f == 0.0) uv = vec2(d.z, d.y) / abs(d.x); else if (f == 1.0) uv = vec2(-d.x, -d.z) / abs(d.y);\n" +
+    "  else if (f == 2.0) uv = vec2(-d.x, d.y) / abs(d.z); else if (f == 3.0) uv = vec2(-d.z, d.y) / abs(d.x);\n" +
+    "  else if (f == 4.0) uv = vec2(-d.x, d.z) / abs(d.y); else uv = vec2(d.x, d.y) / abs(d.z);\n" +
+    "  return 0.5 * (uv + 1.0);\n" +
+    "}\n" +
+    "vec3 faceDir(vec2 uv, float f) {\n" +
+    "  uv = 2.0 * uv - 1.0; vec3 d = vec3(uv, 1.0);\n" +
+    "  if (f == 0.0) d = d.zyx; else if (f == 1.0) { d = d.xzy; d.xz *= -1.0; } else if (f == 2.0) d.x *= -1.0;\n" +
+    "  else if (f == 3.0) { d = d.zyx; d.xz *= -1.0; } else if (f == 4.0) { d = d.xzy; d.xy *= -1.0; } else d.z *= -1.0;\n" +
+    "  return d;\n" +
+    "}\n" +
+    "vec3 cubeUv(sampler2D t, vec3 d, float s) {\n" +
+    "  float f = faceOf(d); vec2 uv = faceUv(d, f) * (s - 2.0) + 1.0;\n" +
+    "  if (f > 2.0) { uv.y += s; f -= 3.0; }\n" +
+    "  uv.x += f * s;\n" +
+    "  return textureLod(t, uv / vec2(3.0 * s, 2.0 * s), 0.0).rgb;\n" +
+    "}\n" +
+    "vec2 equirectUv(vec3 d) { return vec2(atan(d.z, d.x) * 0.1591549431 + 0.5, asin(clamp(d.y, -1.0, 1.0)) * 0.3183098862 + 0.5); }\n";
   var FS_BODY = "" +
     "precision highp float;\n" +
     "in vec3 v_world; in vec3 v_normal; in vec2 v_uv; in vec2 v_uv0; in vec3 v_color; in float v_depth; in float v_lineDist;\n" +
@@ -120,7 +143,7 @@
     "uniform vec4 u_mat[6];\n" +
     "uniform sampler2D u_dfg;\n" +
     "uniform vec4 u_lights[" + (MAX_LIGHTS * 7) + "];\n" +
-    "uniform sampler2D u_ltc1, u_ltc2;\n" +
+    "uniform sampler2D u_ltc;\n" +
     // shadow maps: slots 0-2 directional/spot (2D), slot 3 point (cube)
     "#if SHADOW_TYPE == 3\n" +
     "uniform sampler2D u_sh0, u_sh1, u_sh2;\n" +
@@ -133,6 +156,11 @@
     "uniform vec4 u_shParam[4];\n" +
     "uniform vec4 u_shSize[4];\n" +
     "uniform int u_receive;\n" +
+    // environment: u_env = mode (1 prefiltered for Standard/Physical, 2 reflected equirect for Basic/Lambert/Phong),
+    // intensity, combine (multiply, mix, add), reflectivity; u_envUV = max mip, texel width, height, refraction ratio (0 reflects)
+    "uniform sampler2D u_envMap;\n" +
+    "uniform vec4 u_env, u_envUV;\n" +
+    "uniform mat3 u_envRot;\n" +
     "uniform int u_nlights;\n" +
     "uniform vec4 u_fog[2];\n" +
     "uniform vec3 u_cam;\n" +
@@ -142,7 +170,7 @@
     "uniform int u_hasMap, u_points, u_hasNormal, u_opaque, u_tone;\n" +
     "uniform float u_exposure;\n" +
     "out vec4 o_color;\n" +
-    COMMON +
+    COMMON + CUBE_UV +
     "bool has(int b) { return (u_maps & b) != 0; }\n" +
     // cubic B-spline filtered sample of a mip level pair (three.js's textureBicubic)
     "float bw0(float a) { return (1.0 / 6.0) * (a * (a * (-a + 3.0) - 3.0) + 1.0); }\n" +
@@ -227,6 +255,23 @@
     "  return mix(1.0, shadow, pr.x);\n" +
     "}\n" +
     "float sheenAlbedo(float nv, float r) { float r2 = r * r, ri = 1.0 / (r + 0.1); float a = -1.9362 + 1.0678 * r + 0.4573 * r2 - 0.8469 * ri; float b = -0.6014 + 0.5538 * r - 0.4670 * r2 - 0.1255 * ri; return clamp(exp(a * clamp(nv, 0.0, 1.0) + b), 0.0, 1.0); }\n" +
+    "float envMip(float r) {\n" +
+    "  if (r >= 0.8) return (1.0 - r) * 5.0 - 2.0; if (r >= 0.4) return (0.8 - r) * 7.5 - 1.0;\n" +
+    "  if (r >= 0.305) return (0.4 - r) / 0.095 + 2.0; if (r >= 0.21) return (0.305 - r) / 0.095 + 3.0; return -2.0 * log2(1.16 * r);\n" +
+    "}\n" +
+    "vec3 envLevel(vec3 d, float mipInt) {\n" +
+    "  float f = faceOf(d), fi = max(4.0 - mipInt, 0.0); mipInt = max(mipInt, 4.0); float fs = exp2(mipInt);\n" +
+    "  vec2 uv = faceUv(d, f) * (fs - 2.0) + 1.0;\n" +
+    "  if (f > 2.0) { uv.y += fs; f -= 3.0; }\n" +
+    "  uv.x += f * fs + fi * 48.0; uv.y += 4.0 * (exp2(u_envUV.x) - fs);\n" +
+    "  return textureLod(u_envMap, uv * u_envUV.yz, 0.0).rgb;\n" +
+    "}\n" +
+    "vec3 envCubeUV(vec3 d, float r) { float m = clamp(envMip(r), -2.0, u_envUV.x), mf = fract(m), mi = floor(m); vec3 c = envLevel(d, mi); return mf == 0.0 ? c : mix(c, envLevel(d, mi + 1.0), mf); }\n" +
+    "vec3 envEquirect(vec3 d) {\n" +
+    "  vec2 uv = equirectUv(d), dx = dFdx(uv), dy = dFdy(uv);\n" +
+    "  dx.x -= floor(dx.x + 0.5); dy.x -= floor(dy.x + 0.5);\n" +
+    "  return textureGrad(u_envMap, uv, dx, dy).rgb;\n" +
+    "}\n" +
     "vec2 tuv(int i) { return (u_t[i] * vec3(v_uv0, 1.0)).xy; }\n" +
     "void main() {\n" +
     "  if (u_dashed == 1 && mod(v_lineDist, u_dashTotal) > u_dashSize) discard;\n" +
@@ -326,7 +371,7 @@
     "          vec3 hw = u_lights[i * 7 + 5].xyz, hh = u_lights[i * 7 + 6].xyz, lc = l0.rgb * l1.w;\n" +
     "          vec3 rc[4]; rc[0] = l2.xyz + hw - hh; rc[1] = l2.xyz - hw - hh; rc[2] = l2.xyz - hw + hh; rc[3] = l2.xyz + hw + hh;\n" +
     "          vec2 luv = vec2(rough, sqrt(1.0 - nv)) * (63.0 / 64.0) + 0.5 / 64.0;\n" +
-    "          vec4 t1 = texture(u_ltc1, luv), t2 = texture(u_ltc2, luv);\n" +
+    "          vec4 t1 = texture(u_ltc, vec2(luv.x * 0.5, luv.y)), t2 = texture(u_ltc, vec2(luv.x * 0.5 + 0.5, luv.y));\n" +
     "          mat3 minv = mat3(vec3(t1.x, 0.0, t1.y), vec3(0.0, 1.0, 0.0), vec3(t1.z, 0.0, t1.w));\n" +
     "          pspec += lc * (f0 * t2.x + (1.0 - f0) * t2.y) * ltcEvaluate(n, toEye, v_world, minv, rc);\n" +
     "          rectDif += lc * ltcEvaluate(n, toEye, v_world, mat3(1.0), rc);\n" +
@@ -392,6 +437,23 @@
     "    }\n" +
     "    if (sheenOn) ind *= 1.0 - shMax * sheenAlbedo(nv, shR);\n" +
     "    vec3 totalDiffuse = albedo * (dif + ind * ao) * dscale + albedo * dscale * rectDif;\n" +
+    // image-based light from the prefiltered environment (three.js's getIBLIrradiance/Radiance, RE_IndirectSpecular_Physical)
+    "    vec3 envSpec = vec3(0.0);\n" +
+    "    if (physical && u_env.x > 0.5 && u_env.x < 1.5) {\n" +
+    "      vec3 irr = 3.141592653589793 * envCubeUV(u_envRot * n, 1.0) * u_env.y;\n" +
+    "      vec3 rv = reflect(-toEye, n); float r2 = rough * rough; rv = normalize(mix(rv, n, r2 * r2));\n" +
+    "      vec3 rad = envCubeUV(u_envRot * rv, rough) * u_env.y;\n" +
+    "      float ess = dfgV.x + dfgV.y, ems = 1.0 - ess;\n" +
+    "      vec3 fssD = vec3(0.04) * dfgV.x + dfgV.y, fssM = albedo * dfgV.x + dfgV.y;\n" +
+    "      vec3 favgD = vec3(0.04 + 0.96 * 0.047619), favgM = albedo + (1.0 - albedo) * 0.047619;\n" +
+    "      vec3 msD = fssD * favgD / (1.0 - ems * favgD) * ems, msM = fssM * favgM / (1.0 - ems * favgM) * ems;\n" +
+    "      vec3 cwi = irr * 0.3183098862;\n" +
+    "      vec3 ed = albedo * (1.0 - metal) * (1.0 - (fssD + msD)) * cwi;\n" +
+    "      envSpec = rad * mix(fssD, fssM, metal) + mix(msD, msM, metal) * cwi;\n" +
+    "      if (sheenOn) { float sc = 1.0 - shMax * sheenAlbedo(nv, shR); ed *= sc; envSpec *= sc; }\n" +
+    "      if (has(16)) envSpec *= clamp(pow(nv + ao, exp2(-16.0 * rough - 1.0)) - 1.0 + ao, 0.0, 1.0);\n" +
+    "      totalDiffuse += ed * ao;\n" +
+    "    }\n" +
     // transmission: the opaque scene seen through the refracted exit point (three.js's getIBLVolumeRefraction)
     "    if (physical && u_trans.x > 0.0) {\n" +
     "      float ior = u_trans.z;\n" +
@@ -407,7 +469,15 @@
     "      transAlpha = mix(1.0, 1.0 - (1.0 - tl.a) * tf, u_trans.x);\n" +
     "      totalDiffuse = mix(totalDiffuse, (1.0 - F) * tm * tl.rgb, u_trans.x);\n" +
     "    }\n" +
-    "    color = totalDiffuse + c2.rgb * spec + pspec + emissive + sheenSpec;\n" +
+    "    color = totalDiffuse + c2.rgb * spec + pspec + emissive + sheenSpec + envSpec;\n" +
+    "  }\n" +
+    // Basic, Lambert and Phong: the environment reflected (or refracted) and combined (three.js's envmap_fragment)
+    "  if (u_env.x > 1.5 && mode == 0 && c5.z < 0.5) {\n" +
+    "    vec3 ctf = u_proj[3][3] > 0.5 ? normalize(vec3(-u_view[0][2], -u_view[1][2], -u_view[2][2])) : normalize(v_world - u_cam);\n" +
+    "    vec3 rv = u_envUV.w > 0.0 ? refract(ctf, n, u_envUV.w) : reflect(ctf, n);\n" +
+    "    vec3 ec = envEquirect(u_envRot * rv);\n" +
+    "    float st = u_env.w;\n" +
+    "    if (u_env.z < 0.5) color = mix(color, color * ec, st); else if (u_env.z < 1.5) color = mix(color, ec, st); else color += ec * st;\n" +
     "  }\n" +
     // MeshNormalMaterial and MeshDepthMaterial write their values as is (no colour space)
     "  bool raw = mode == 2 || mode == 3;\n" +
@@ -457,7 +527,7 @@
     "u_nlights", "u_fog", "u_cam", "u_map", "u_hasMap", "u_points", "u_hasNormal", "u_opaque", "u_tone", "u_exposure", "u_sprite", "u_center", "u_rotation", "u_emap", "u_hasEmap", "u_euvt", "u_dfg",
     "u_alphaMap", "u_roughMap", "u_metalMap", "u_normalMap", "u_aoMap", "u_matcap", "u_gradMap", "u_maps", "u_linearOut", "u_premult", "u_t", "u_normalScale", "u_aoIntensity",
     "u_dispMap", "u_hasDisp", "u_dispT", "u_dispScale", "u_dispBias", "u_dashScale", "u_dashed", "u_dashSize", "u_dashTotal", "u_bumpScale", "u_bumpMap", "u_sheen",
-    "u_trans", "u_attColor", "u_transMap", "u_transSize", "u_ltc1", "u_ltc2",
+    "u_trans", "u_attColor", "u_transMap", "u_transSize", "u_ltc", "u_envMap", "u_env", "u_envRot", "u_envUV",
     "u_sh0", "u_sh1", "u_sh2", "u_shc0", "u_shMat", "u_shParam", "u_shSize", "u_receive"];
 
   function Backend(gl, renderer) {
@@ -485,16 +555,20 @@
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     // the rect area light tables (renderers/ltc_table.rs), float when float textures filter, else half float
     var floatLinear = !!gl.getExtension("OES_texture_float_linear");
-    this.ltc = [R.RenderersLtcTable.ltc_1(), R.RenderersLtcTable.ltc_2()].map(function (data) {
-      var t = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, t);
-      gl.texImage2D(gl.TEXTURE_2D, 0, floatLinear ? gl.RGBA32F : gl.RGBA16F, 64, 64, 0, gl.RGBA, gl.FLOAT, Float32Array.from(data));
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-      return t;
-    });
+    // both tables side by side (64 x 64 each); lookups stay half a texel inside each, so they never mix
+    var l1 = R.RenderersLtcTable.ltc_1(), l2 = R.RenderersLtcTable.ltc_2(), both = new Float32Array(128 * 64 * 4);
+    for (var ly = 0; ly < 64; ly++) for (var lx = 0; lx < 64; lx++) for (var lc = 0; lc < 4; lc++) {
+      both[(ly * 128 + lx) * 4 + lc] = l1[(ly * 64 + lx) * 4 + lc];
+      both[(ly * 128 + 64 + lx) * 4 + lc] = l2[(ly * 64 + lx) * 4 + lc];
+    }
+    this.ltc = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.ltc);
+    gl.texImage2D(gl.TEXTURE_2D, 0, floatLinear ? gl.RGBA32F : gl.RGBA16F, 128, 64, 0, gl.RGBA, gl.FLOAT, both);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
   }
   var B = Backend.prototype;
 
@@ -593,28 +667,6 @@
   // 3 x 2 atlas of cube faces, each `size` texels with a one-texel border.
   var FULL_VS = "#version 300 es\n" +
     "void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }\n";
-  var CUBE_UV = "" +
-    "float faceOf(vec3 d) { vec3 a = abs(d); if (a.x > a.z) return a.x > a.y ? (d.x > 0.0 ? 0.0 : 3.0) : (d.y > 0.0 ? 1.0 : 4.0); return a.z > a.y ? (d.z > 0.0 ? 2.0 : 5.0) : (d.y > 0.0 ? 1.0 : 4.0); }\n" +
-    "vec2 faceUv(vec3 d, float f) {\n" +
-    "  vec2 uv;\n" +
-    "  if (f == 0.0) uv = vec2(d.z, d.y) / abs(d.x); else if (f == 1.0) uv = vec2(-d.x, -d.z) / abs(d.y);\n" +
-    "  else if (f == 2.0) uv = vec2(-d.x, d.y) / abs(d.z); else if (f == 3.0) uv = vec2(-d.z, d.y) / abs(d.x);\n" +
-    "  else if (f == 4.0) uv = vec2(-d.x, d.z) / abs(d.y); else uv = vec2(d.x, d.y) / abs(d.z);\n" +
-    "  return 0.5 * (uv + 1.0);\n" +
-    "}\n" +
-    "vec3 faceDir(vec2 uv, float f) {\n" +
-    "  uv = 2.0 * uv - 1.0; vec3 d = vec3(uv, 1.0);\n" +
-    "  if (f == 0.0) d = d.zyx; else if (f == 1.0) { d = d.xzy; d.xz *= -1.0; } else if (f == 2.0) d.x *= -1.0;\n" +
-    "  else if (f == 3.0) { d = d.zyx; d.xz *= -1.0; } else if (f == 4.0) { d = d.xzy; d.xy *= -1.0; } else d.z *= -1.0;\n" +
-    "  return d;\n" +
-    "}\n" +
-    "vec3 cubeUv(sampler2D t, vec3 d, float s) {\n" +
-    "  float f = faceOf(d); vec2 uv = faceUv(d, f) * (s - 2.0) + 1.0;\n" +
-    "  if (f > 2.0) { uv.y += s; f -= 3.0; }\n" +
-    "  uv.x += f * s;\n" +
-    "  return textureLod(t, uv / vec2(3.0 * s, 2.0 * s), 0.0).rgb;\n" +
-    "}\n" +
-    "vec2 equirectUv(vec3 d) { return vec2(atan(d.z, d.x) * 0.1591549431 + 0.5, asin(clamp(d.y, -1.0, 1.0)) * 0.3183098862 + 0.5); }\n";
   var PMREM_FS = "#version 300 es\n" +
     "precision highp float;\n" +
     "uniform sampler2D u_src;\n" +
@@ -729,7 +781,7 @@
       this.fbo = gl.createFramebuffer();
       this.halfFloat = !!gl.getExtension("EXT_color_buffer_float");
     }
-    if (e) for (var d = 0; d < e.levels.length; d++) gl.deleteTexture(e.levels[d]);
+    if (e) { for (var d = 0; d < e.levels.length; d++) gl.deleteTexture(e.levels[d]); gl.deleteTexture(e.atlas); }
     var lodMax = Math.floor(Math.log2(w / 4)), cube = Math.pow(2, lodMax);
     var n = lodMax - 4 + 1 + 6, sizes = [], levels = [];
     for (var i = 0; i < n; i++) sizes.push(i > lodMax - 4 ? 16 : Math.pow(2, lodMax - i));
@@ -770,8 +822,31 @@
       pass(levels[k], sizes[k], tmp, 1, sizes[k], 0);
       gl.deleteTexture(tmp);
     }
+    // every level in one texture laid out as three.js's CubeUV map: the levels down to 16 texels in a
+    // column, the rougher 16-texel levels in a row beside the last one
+    var aw = 3 * Math.max(cube, 112), ah = 4 * cube;
+    var atlas = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, atlas);
+    gl.texImage2D(gl.TEXTURE_2D, 0, self.halfFloat ? gl.RGBA16F : gl.RGBA8, aw, ah, 0, gl.RGBA, self.halfFloat ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    if (!this.fbo2) this.fbo2 = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.fbo2);
+    gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, atlas, 0);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.fbo);
+    for (var q = 0; q < n; q++) {
+      var s = sizes[q], m = lodMax - q, ax = m >= 4 ? 0 : (4 - m) * 48, ay = 4 * (cube - Math.max(s, 16));
+      gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, levels[q], 0);
+      gl.blitFramebuffer(0, 0, 3 * s, 2 * s, ax, ay, ax + 3 * s, ay + 2 * s, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    }
+    gl.framebufferTexture2D(gl.READ_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.fbo2);
+    gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    e = { version: tex.version, levels: levels, sizes: sizes, lodMax: lodMax };
+    e = { version: tex.version, levels: levels, sizes: sizes, lodMax: lodMax, atlas: atlas, aw: aw, ah: ah };
     this.envs.set(tex, e);
     return e;
   };
@@ -1057,8 +1132,8 @@
     gl.uniform1i(u.u_dfg, 2);
     for (var mi = 0; mi < MAPS.length; mi++) gl.uniform1i(u[MAPS[mi].uniform], MAPS[mi].unit);
     gl.uniform1i(u.u_dispMap, 12);
-    gl.uniform1i(u.u_ltc1, 10);
-    gl.uniform1i(u.u_ltc2, 11);
+    gl.uniform1i(u.u_ltc, 10);
+    gl.uniform1i(u.u_envMap, 11);
     gl.uniform1i(u.u_transMap, 14);
     gl.uniform1i(u.u_sh0, SHADOW_UNITS[0]);
     gl.uniform1i(u.u_sh1, SHADOW_UNITS[1]);
@@ -1066,9 +1141,33 @@
     gl.uniform1i(u.u_shc0, SHADOW_UNITS[3]);
   };
 
+  // three.js's choice of environment for a material: its own envMap, else scene.environment for
+  // Standard/Physical, Lambert and Phong; Standard/Physical read it prefiltered
+  function envOf(material, scene) {
+    var pbr = !!material.isMeshStandardMaterial, lp = !!(material.isMeshLambertMaterial || material.isMeshPhongMaterial);
+    if (!pbr && !lp && !material.isMeshBasicMaterial) return null;
+    var own = material.envMap || null, tex = own || ((pbr || lp) && scene && scene.environment) || null;
+    if (!tex || tex.isColor || !tex.image || !(tex.mapping === 303 || tex.mapping === 304)) return null;
+    return { tex: tex, pbr: pbr, scene: !own };
+  }
+
+  // the prefiltered environments this frame needs, made before any drawing (they use their own targets)
+  B.prepareEnvs = function (scene, plan) {
+    var seen = [];
+    for (var i = 0; i < plan.items.length; i++) {
+      var ms = plan.items[i].object.material;
+      ms = Array.isArray(ms) ? ms : ms ? [ms] : [];
+      for (var j = 0; j < ms.length; j++) {
+        var e = envOf(ms[j], scene);
+        if (e && e.pbr && seen.indexOf(e.tex) < 0) { seen.push(e.tex); this.pmrem(e.tex); }
+      }
+    }
+  };
+
   B.render = function (scene, camera) {
     var gl = this.gl, r = this.renderer, soft = r._soft;
     var plan = R.RenderersPlan.plan_frame(scene, camera, soft.clear_color, soft.clear_alpha);
+    this.scene = scene;
     var w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
     // shadow type (three.js: 0 basic, 1 PCF, 2 PCF soft = PCF, 3 VSM) -> 2, 1, 3; 0 none
     var sm = r.shadowMap, stype = sm && sm.enabled ? (sm.type === 0 ? 2 : sm.type === 3 ? 3 : 1) : 0;
@@ -1078,6 +1177,8 @@
     this.setUnits(u);
     this.bindShadowDummies(stype || 1);
     var slots = stype ? this.renderShadows(scene, plan, stype) : {};
+    this.prepareEnvs(scene, plan);
+    gl.useProgram(this.prog);
     gl.viewport(0, 0, w, h);
     var linearOut = r.outputColorSpace === "srgb-linear";
     var cl = plan.clear, s = linearOut ? function (x) { return x; } : R.MathsColor.linear_to_srgb;
@@ -1112,8 +1213,7 @@
     gl.uniform1f(u.u_exposure, r.toneMappingExposure === undefined ? 1 : r.toneMappingExposure);
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.dfg);
-    gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, this.ltc[0]);
-    gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D, this.ltc[1]);
+    gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, this.ltc);
     gl.activeTexture(gl.TEXTURE0);
     gl.uniform1i(u.u_linearOut, linearOut ? 1 : 0);
     this.linearOut = linearOut;
@@ -1192,12 +1292,39 @@
     }
   };
 
+  B.envUniforms = function (material) {
+    var gl = this.gl, u = this.u, scene = this.scene, e = this.shadowPass ? null : envOf(material, scene);
+    var pm = e && e.pbr ? this.envs.get(e.tex) : null;
+    if (!e || (e.pbr && !pm)) { gl.uniform4f(u.u_env, 0, 0, 0, 0); return; }
+    gl.activeTexture(gl.TEXTURE11);
+    if (e.pbr) {
+      gl.bindTexture(gl.TEXTURE_2D, pm.atlas);
+      gl.uniform4f(u.u_envUV, pm.lodMax, 1 / pm.aw, 1 / pm.ah, 0);
+      var intensity = e.scene ? (scene.environmentIntensity == null ? 1 : scene.environmentIntensity) : (material.envMapIntensity == null ? 1 : material.envMapIntensity);
+      gl.uniform4f(u.u_env, 1, intensity, 0, 0);
+    } else {
+      if (!this.texture(e.tex)) { gl.activeTexture(gl.TEXTURE0); gl.uniform4f(u.u_env, 0, 0, 0, 0); return; }
+      var refract = e.tex.mapping === 304 ? (material.refractionRatio == null ? 0.98 : material.refractionRatio) : 0;
+      gl.uniform4f(u.u_envUV, 0, 0, 0, refract);
+      gl.uniform4f(u.u_env, 2, 1, material.combine | 0, material.reflectivity == null ? 1 : material.reflectivity);
+    }
+    gl.activeTexture(gl.TEXTURE0);
+    // three.js passes the inverse (transpose) of the rotation
+    var rot = e.scene ? scene.environmentRotation : material.envMapRotation;
+    var m4 = this._envM || (this._envM = new T.Matrix4());
+    m4.identity();
+    if (rot) m4.makeRotationFromEuler(rot);
+    var me = m4.elements;
+    gl.uniformMatrix3fv(u.u_envRot, false, [me[0], me[4], me[8], me[1], me[5], me[9], me[2], me[6], me[10]]);
+  };
+
   B.drawWith = function (item, material, info, group) {
     var gl = this.gl, u = this.u, o = item.object, kind = item.kind;
     var geometry = o.geometry, position = geometry.getAttribute("position");
     var sprite = kind === 7;
     var mu = R.RenderersPlan.material_uniforms(material);
     gl.uniform4fv(u.u_mat, mu);
+    this.envUniforms(material);
     gl.uniformMatrix4fv(u.u_model, false, o.matrixWorld.elements);
     gl.uniformMatrix3fv(u.u_uvt, false, R.RenderersPlan.map_transform(material));
     var mesh = kind === 1 || kind === 2;

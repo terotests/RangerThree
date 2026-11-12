@@ -642,5 +642,197 @@ renderer.setAnimationLoop((t) => {
   });
   knot.rotation.y = t / 1800;
   renderer.render(scene, camera);
+});`,
+
+  "Environment map: metal and roughness": `
+// An environment painted on a canvas as an equirectangular image (sky,
+// sun, coloured panels, ground). scene.environment lights every Standard
+// material from it, blurred per roughness as PMREMGenerator does; the
+// Basic materials in front reflect and refract it directly.
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, 4 / 3, 0.1, 100);
+camera.position.set(0, 0.6, 9);
+orbit(camera, new THREE.Vector3(0, 0, 0));
+
+const c = document.createElement("canvas");
+c.width = 1024; c.height = 512;
+const g = c.getContext("2d");
+const sky = g.createLinearGradient(0, 0, 0, 512);
+sky.addColorStop(0, "#1d4f91"); sky.addColorStop(0.47, "#bcd9f2");
+sky.addColorStop(0.5, "#6b5a45"); sky.addColorStop(1, "#231d17");
+g.fillStyle = sky; g.fillRect(0, 0, 1024, 512);
+// the panels sit behind the camera, where the spheres reflect
+["#ff5a36", "#ffd23f", "#3ec46d", "#2fa7ff", "#c45cff", "#ffffff"].forEach((col, i) => {
+  g.fillStyle = col; g.fillRect(570 + i * 68, 190, 44, 70);
+});
+g.fillStyle = "#fffbe8"; g.beginPath(); g.arc(300, 80, 28, 0, Math.PI * 2); g.fill();
+
+function envTexture(mapping) {
+  const t = new THREE.CanvasTexture(c);
+  t.mapping = mapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const env = envTexture(THREE.EquirectangularReflectionMapping);
+scene.background = env;
+scene.environment = env;
+
+// metalness grows up the rows, roughness along them
+const ball = new THREE.SphereGeometry(0.42, 48, 24);
+for (let row = 0; row < 3; row++) for (let col = 0; col < 6; col++) {
+  const m = new THREE.MeshStandardMaterial({ color: row === 2 ? 0xffc870 : 0xffffff, metalness: row / 2, roughness: col / 5 });
+  const s = new THREE.Mesh(ball, m);
+  s.position.set((col - 2.5) * 1.05, row - 0.4, 0);
+  scene.add(s);
+}
+
+// a mirror torus and a glass-like ball (Basic materials with envMap)
+const mirror = new THREE.Mesh(new THREE.TorusGeometry(0.5, 0.2, 32, 64),
+  new THREE.MeshBasicMaterial({ envMap: env, color: 0xffffff }));
+mirror.position.set(-1.4, -1.9, 1);
+const glass = new THREE.Mesh(new THREE.SphereGeometry(0.6, 48, 24),
+  new THREE.MeshBasicMaterial({ envMap: envTexture(THREE.EquirectangularRefractionMapping), refractionRatio: 0.9, color: 0xe8f4ff }));
+glass.position.set(1.4, -1.9, 1);
+scene.add(mirror, glass);
+
+renderer.setAnimationLoop((t) => {
+  mirror.rotation.set(t / 1700, t / 1100, 0);
+  renderer.render(scene, camera);
+});`,
+
+  "Shadows: sun, spot and point": `
+// Three shadow-casting lights: a directional sun (orthographic shadow
+// camera), a spotlight and a point light (six-sided cube shadow map).
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x10131a);
+const camera = new THREE.PerspectiveCamera(45, 4 / 3, 0.1, 100);
+camera.position.set(6, 6, 10);
+orbit(camera, new THREE.Vector3(0, 1, 0));
+
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), new THREE.MeshStandardMaterial({ color: 0x9aa3ad, roughness: 0.9 }));
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const knot = new THREE.Mesh(new THREE.TorusKnotGeometry(0.8, 0.28, 128, 16), new THREE.MeshStandardMaterial({ color: 0xff7a45, roughness: 0.4 }));
+knot.position.y = 2;
+const pillars = [];
+for (let i = 0; i < 6; i++) {
+  const a = i / 6 * Math.PI * 2;
+  const p = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1.2 + (i % 3) * 0.6, 0.5), new THREE.MeshStandardMaterial({ color: 0x4f8cff, roughness: 0.6 }));
+  p.position.set(Math.cos(a) * 3.2, p.geometry.parameters.height / 2, Math.sin(a) * 3.2);
+  pillars.push(p);
+}
+for (const o of [knot, ...pillars]) { o.castShadow = true; o.receiveShadow = true; scene.add(o); }
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.15));
+const sun = new THREE.DirectionalLight(0xfff1dd, 1.6);
+sun.position.set(-5, 8, 4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { left: -7, right: 7, top: 7, bottom: -7, near: 1, far: 25 });
+sun.shadow.camera.updateProjectionMatrix();
+scene.add(sun);
+
+const spot = new THREE.SpotLight(0x66ccff, 60, 20, Math.PI / 7, 0.4);
+spot.position.set(5, 7, -3);
+spot.castShadow = true;
+scene.add(spot);
+
+const point = new THREE.PointLight(0xffb347, 12, 12);
+point.castShadow = true;
+point.shadow.mapSize.set(512, 512);
+const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 8), new THREE.MeshBasicMaterial({ color: 0xffd28a }));
+point.add(bulb);
+scene.add(point);
+
+renderer.setAnimationLoop((t) => {
+  knot.rotation.set(t / 2100, t / 1500, 0);
+  point.position.set(Math.cos(t / 1300) * 2, 0.9, Math.sin(t / 1300) * 2);
+  renderer.render(scene, camera);
+});`,
+
+  "Area lights": `
+// RectAreaLight: light from a rectangle, evaluated with linearly
+// transformed cosines (Standard and Physical materials only). In three.js
+// call RectAreaLightUniformsLib.init() from the addons first; the
+// playground has it on THREE.
+THREE.RectAreaLightUniformsLib.init();
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050505);
+const camera = new THREE.PerspectiveCamera(45, 4 / 3, 1, 1000);
+camera.position.set(0, 5, -15);
+orbit(camera, new THREE.Vector3(0, 5, 0));
+
+[[0xff0000, -5], [0x00ff00, 0], [0x0000ff, 5]].forEach(([color, x]) => {
+  const light = new THREE.RectAreaLight(color, 5, 4, 10);
+  light.position.set(x, 5, 5);
+  scene.add(light);
+  // the panel itself, so the light has a visible shape
+  const panel = new THREE.Mesh(new THREE.PlaneGeometry(4, 10), new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+  panel.position.copy(light.position);
+  scene.add(panel);
+});
+
+const floor = new THREE.Mesh(new THREE.BoxGeometry(200, 0.1, 200), new THREE.MeshStandardMaterial({ color: 0xbcbcbc, roughness: 0.1, metalness: 0 }));
+scene.add(floor);
+const knot = new THREE.Mesh(new THREE.TorusKnotGeometry(1.5, 0.5, 200, 16), new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0, metalness: 0 }));
+knot.position.set(0, 5, 0);
+scene.add(knot);
+
+renderer.setAnimationLoop((t) => {
+  knot.rotation.y = t / 1000;
+  renderer.render(scene, camera);
+});`,
+
+  "Physical: glass, sheen and gold": `
+// MeshPhysicalMaterial lit by a canvas-made environment: a transmissive
+// glass ball refracting the boxes behind it, a sheen (velvet) torus and a
+// gold knot. The background is the environment blurred.
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 4 / 3, 0.1, 100);
+camera.position.set(0, 1.6, 8);
+orbit(camera, new THREE.Vector3(0, 0.6, 0));
+
+const c = document.createElement("canvas");
+c.width = 512; c.height = 256;
+const g = c.getContext("2d");
+const sky = g.createLinearGradient(0, 0, 0, 256);
+sky.addColorStop(0, "#2b3a67"); sky.addColorStop(0.45, "#f3d9b1"); sky.addColorStop(0.5, "#5b4636"); sky.addColorStop(1, "#1a1410");
+g.fillStyle = sky; g.fillRect(0, 0, 512, 256);
+g.fillStyle = "#fff6e0"; g.fillRect(200, 40, 110, 40);
+const env = new THREE.CanvasTexture(c);
+env.mapping = THREE.EquirectangularReflectionMapping;
+env.colorSpace = THREE.SRGBColorSpace;
+scene.environment = env;
+scene.background = env;
+scene.backgroundBlurriness = 0.35;
+
+const colors = [0xff4d4d, 0xffc94d, 0x4dff88, 0x4db8ff];
+colors.forEach((col, i) => {
+  const b = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), new THREE.MeshStandardMaterial({ color: col, roughness: 0.5 }));
+  b.position.set(-0.9 + i * 0.6, 0.6, -1.6);
+  scene.add(b);
+});
+
+const glass = new THREE.Mesh(new THREE.SphereGeometry(0.9, 64, 32),
+  new THREE.MeshPhysicalMaterial({ transmission: 1, roughness: 0.05, thickness: 1.2, ior: 1.5, color: 0xffffff }));
+glass.position.set(0, 0.9, 0);
+const velvet = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.22, 32, 64),
+  new THREE.MeshPhysicalMaterial({ color: 0x3a0b4f, roughness: 0.8, sheen: 1, sheenRoughness: 0.4, sheenColor: 0xff7ad9 }));
+velvet.position.set(-2.4, 0.8, 0);
+const gold = new THREE.Mesh(new THREE.TorusKnotGeometry(0.45, 0.16, 128, 16),
+  new THREE.MeshPhysicalMaterial({ color: 0xffc35a, metalness: 1, roughness: 0.25 }));
+gold.position.set(2.4, 0.8, 0);
+scene.add(glass, velvet, gold);
+scene.add(new THREE.DirectionalLight(0xffffff, 1.2));
+
+renderer.setAnimationLoop((t) => {
+  velvet.rotation.set(t / 1900, t / 1300, 0);
+  gold.rotation.set(t / 2300, t / 1500, 0);
+  renderer.render(scene, camera);
 });`
 });

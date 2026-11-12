@@ -9,9 +9,11 @@ if (impl === "ref") { window.module = { exports: {} }; window.exports = module.e
 else { ["rangerthree-core.js", "three.js", "three-scene.js", "three-curves.js", "three-renderer.js", "three-webgl.js"].forEach(load); }
 load("examples.js");
 </script>
+<script type="importmap">{"imports":{"three":"/three-shim.js"}}</script>
 <script>
 if (impl === "ref") window.THREE = module.exports;
-(function () {
+// three.js needs its rect area light tables from the addon; the module script below loads them, then runs
+window.__run = function () {
   var canvas = document.getElementById("c");
   var opts = { canvas: canvas, preserveDrawingBuffer: true, antialias: true };
   if (Q.get("backend") === "software") opts.software = true;
@@ -26,5 +28,13 @@ if (impl === "ref") window.THREE = module.exports;
   try { new Function("THREE", "renderer", "canvas", "orbit", EXAMPLES[Q.get("ex")])(THREE, renderer, canvas, orbit); }
   catch (e) { window.__err = String(e && e.stack || e); }
   window.__done = true;
-})();
+};
+if (impl !== "ref") window.__run();
+</script>
+<script type="module">
+if (new URLSearchParams(location.search).get("impl") === "ref") {
+  const { RectAreaLightUniformsLib } = await import("/addons/lights/RectAreaLightUniformsLib.js");
+  window.THREE = Object.assign({}, window.THREE, { RectAreaLightUniformsLib });
+  window.__run();
+}
 </script></body></html>

@@ -526,6 +526,7 @@
     }, function (params) { this.setValues(params); });
     F.flag(T[name], "is" + name);
   });
+  accessor(T.Material.prototype, "envMapRotation", function () { if (!this._emr) def(this, "_emr", new T.Euler()); return this._emr; });
   (function () {
     var sp = T.ShaderMaterial.prototype;
     ["uniforms", "defines", "vertexShader", "fragmentShader", "lights", "clipping", "glslVersion", "extensions", "uniformsGroups"].forEach(function (k) {
@@ -1290,6 +1291,8 @@
   T.DirectionalLight = light("DirectionalLight", R.Object3D.directional_light, [0xffffff, 1], function () { this.position.copy(T.Object3D.DEFAULT_UP); this.updateMatrix(); });
   T.PointLight = light("PointLight", R.Object3D.point_light, [0xffffff, 1, 0, 2]);
   T.SpotLight = light("SpotLight", R.Object3D.spot_light, [0xffffff, 1, 0, Math.PI / 3, 0, 2], function () { this.position.copy(T.Object3D.DEFAULT_UP); this.updateMatrix(); });
+  // three.js needs RectAreaLightUniformsLib.init() (addons) before rect area lights draw; the tables are built in here
+  T.RectAreaLightUniformsLib = { init: function () {} };
   T.RectAreaLight = light("RectAreaLight", R.Object3D.rect_area_light, [0xffffff, 1, 10, 10]);
   accessor(T.PointLight.prototype, "power", function () { return this.intensity * 4 * Math.PI; }, function (v) { this.intensity = v / (4 * Math.PI); });
   accessor(T.SpotLight.prototype, "power", function () { return this.intensity * Math.PI; }, function (v) { this.intensity = v / Math.PI; });
