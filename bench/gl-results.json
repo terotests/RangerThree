@@ -1,0 +1,187 @@
+{
+ "date": "2026-11-12T18:57:11.297Z",
+ "size": [
+  320,
+  240
+ ],
+ "frames": 60,
+ "rows": [
+  {
+   "scene": "Torus knot",
+   "mode": "v8",
+   "backend": "webgl2",
+   "setup": 74.8,
+   "first": 320.2,
+   "median": 17.8,
+   "mean": 23.26,
+   "medianCpu": 0.3,
+   "medianHost": 0,
+   "checksum": 558820317,
+   "wasmMB": null,
+   "jitModules": null,
+   "heapMB": 13.4,
+   "bridge": null,
+   "out": ""
+  },
+  {
+   "scene": "Torus knot",
+   "mode": "cerxes",
+   "backend": "webgl2",
+   "setup": 618.1,
+   "first": 382.5,
+   "median": 20.4,
+   "mean": 26.8,
+   "medianCpu": 1.7,
+   "medianHost": 0.2,
+   "checksum": 558820317,
+   "wasmMB": 48.9,
+   "jitModules": 0,
+   "heapMB": 12.8,
+   "bridge": {
+    "commandsPerFrame": 102,
+    "kBPerFrame": 16.9,
+    "syncs": 4
+   },
+   "out": ""
+  },
+  {
+   "scene": "Torus knot",
+   "mode": "cerxes-jit",
+   "backend": "webgl2",
+   "setup": 721.3,
+   "first": 446.8,
+   "median": 24.1,
+   "mean": 32.27,
+   "medianCpu": 2.7,
+   "medianHost": 0.3,
+   "checksum": 558820317,
+   "wasmMB": 48.9,
+   "jitModules": 42,
+   "heapMB": 13.4,
+   "bridge": {
+    "commandsPerFrame": 102,
+    "kBPerFrame": 16.9,
+    "syncs": 4
+   },
+   "out": ""
+  },
+  {
+   "scene": "Primitives and lights",
+   "mode": "v8",
+   "backend": "webgl2",
+   "setup": 53.5,
+   "first": 336.9,
+   "median": 31.5,
+   "mean": 36.82,
+   "medianCpu": 0.6,
+   "medianHost": 0,
+   "checksum": 129144391,
+   "wasmMB": null,
+   "jitModules": null,
+   "heapMB": 12.4,
+   "bridge": null,
+   "out": ""
+  },
+  {
+   "scene": "Primitives and lights",
+   "mode": "cerxes",
+   "backend": "webgl2",
+   "setup": 626.6,
+   "first": 348.6,
+   "median": 33.9,
+   "mean": 39.51,
+   "medianCpu": 3.2,
+   "medianHost": 0.4,
+   "checksum": 129144391,
+   "wasmMB": 48.9,
+   "jitModules": 0,
+   "heapMB": 13.6,
+   "bridge": {
+    "commandsPerFrame": 382,
+    "kBPerFrame": 26.7,
+    "syncs": 4
+   },
+   "out": ""
+  },
+  {
+   "scene": "Primitives and lights",
+   "mode": "cerxes-jit",
+   "backend": "webgl2",
+   "setup": 777.1,
+   "first": 386.4,
+   "median": 34,
+   "mean": 41.53,
+   "medianCpu": 4.1,
+   "medianHost": 0.4,
+   "checksum": 129144391,
+   "wasmMB": 48.9,
+   "jitModules": 54,
+   "heapMB": 14.1,
+   "bridge": {
+    "commandsPerFrame": 382,
+    "kBPerFrame": 26.7,
+    "syncs": 4
+   },
+   "out": ""
+  },
+  {
+   "scene": "Instancing: a field of cubes",
+   "mode": "v8",
+   "backend": "webgl2",
+   "setup": 60.7,
+   "first": 401.7,
+   "median": 68.5,
+   "mean": 75.65,
+   "medianCpu": 0.8,
+   "medianHost": 0,
+   "checksum": 800154498,
+   "wasmMB": null,
+   "jitModules": null,
+   "heapMB": 12.6,
+   "bridge": null,
+   "out": ""
+  },
+  {
+   "scene": "Instancing: a field of cubes",
+   "mode": "cerxes",
+   "backend": "webgl2",
+   "setup": 571,
+   "first": 402.7,
+   "median": 89.3,
+   "mean": 95.94,
+   "medianCpu": 15.5,
+   "medianHost": 0.5,
+   "checksum": 800154498,
+   "wasmMB": 48.9,
+   "jitModules": 0,
+   "heapMB": 17.3,
+   "bridge": {
+    "commandsPerFrame": 115,
+    "kBPerFrame": 59.1,
+    "syncs": 4
+   },
+   "out": ""
+  },
+  {
+   "scene": "Instancing: a field of cubes",
+   "mode": "cerxes-jit",
+   "backend": "webgl2",
+   "setup": 650.8,
+   "first": 427.3,
+   "median": 88.7,
+   "mean": 94.52,
+   "medianCpu": 16.6,
+   "medianHost": 0.4,
+   "checksum": 800154498,
+   "wasmMB": 48.9,
+   "jitModules": 39,
+   "heapMB": 17.3,
+   "bridge": {
+    "commandsPerFrame": 115,
+    "kBPerFrame": 59.1,
+    "syncs": 4
+   },
+   "out": ""
+  }
+ ]
+}
