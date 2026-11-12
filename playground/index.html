@@ -19,7 +19,7 @@
   select, button { font: inherit; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
   button.run { background: var(--accent); color: #fff; border-color: var(--accent); }
   textarea { flex: 1; min-height: 420px; border: 0; padding: 12px; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; background: var(--code); color: var(--text); resize: vertical; tab-size: 2; }
-  canvas { display: block; width: 100%; height: auto; background: #000; image-rendering: auto; }
+  canvas { touch-action: none; display: block; width: 100%; height: auto; background: #000; image-rendering: auto; }
   #status { padding: 8px 12px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); white-space: pre-wrap; min-height: 2.5em; }
   #status.err { color: #d0453c; }
 </style>
@@ -54,23 +54,52 @@
   var sel = document.getElementById("example"), code = document.getElementById("code");
   var canvas = document.getElementById("view"), status = document.getElementById("status");
   var current = null;
+  // drag to orbit around `target`, wheel to zoom (a small OrbitControls)
+  function orbit(camera, target) {
+    target = target || new THREE.Vector3();
+    var offset = camera.position.clone().sub(target);
+    var radius = offset.length(), theta = Math.atan2(offset.x, offset.z), phi = Math.acos(Math.max(-1, Math.min(1, offset.y / radius)));
+    function apply() {
+      camera.position.set(target.x + radius * Math.sin(phi) * Math.sin(theta), target.y + radius * Math.cos(phi), target.z + radius * Math.sin(phi) * Math.cos(theta));
+      camera.lookAt(target);
+    }
+    var drag = null;
+    canvas.onpointerdown = function (e) { drag = { x: e.clientX, y: e.clientY }; canvas.setPointerCapture(e.pointerId); };
+    canvas.onpointerup = function () { drag = null; };
+    var move = function (e) {
+      if (!drag) return;
+      theta -= (e.clientX - drag.x) * 0.008;
+      phi = Math.max(0.05, Math.min(Math.PI - 0.05, phi - (e.clientY - drag.y) * 0.008));
+      drag = { x: e.clientX, y: e.clientY };
+      apply();
+    };
+    canvas.addEventListener("pointermove", move);
+    canvas.onwheel = function (e) { e.preventDefault(); radius = Math.max(0.5, radius * Math.pow(1.0015, e.deltaY)); apply(); };
+    cleanups.push(function () { canvas.removeEventListener("pointermove", move); });
+    apply();
+  }
+  var cleanups = [];
   Object.keys(EXAMPLES).forEach(function (k) { var o = document.createElement("option"); o.value = k; o.textContent = k; sel.appendChild(o); });
   function load(name) { code.value = EXAMPLES[name].trim() + "\n"; run(); }
   function run() {
     if (current) current.setAnimationLoop(null);
+    cleanups.forEach(function (f) { f(); }); cleanups = [];
+    canvas.onpointerdown = canvas.onpointerup = canvas.onpointermove = canvas.onwheel = null;
     status.className = ""; status.textContent = "";
     var renderer = new THREE.WebGLRenderer({ canvas: canvas });
     renderer.setSize(canvas.clientWidth || 640, Math.round((canvas.clientWidth || 640) * 0.75), false);
     current = renderer;
-    var frames = 0, t0 = performance.now();
+    var frames = 0, t0 = performance.now(), shown = false;
     var wrapped = renderer.render.bind(renderer);
     renderer.render = function (s, c) {
       wrapped(s, c); frames++;
       var dt = performance.now() - t0;
-      if (dt > 1000) { status.textContent = (frames * 1000 / dt).toFixed(1) + " fps, " + renderer.info.render.triangles + " triangles"; frames = 0; t0 = performance.now(); }
-      else if (frames === 1) status.textContent = renderer.info.render.triangles + " triangles";
+      var info = renderer.info.render;
+      var what = info.triangles + " triangles" + (info.lines ? ", " + info.lines + " lines" : "") + (info.points ? ", " + info.points + " points" : "");
+      if (dt > 1000) { status.textContent = (frames * 1000 / dt).toFixed(1) + " fps, " + what; frames = 0; t0 = performance.now(); shown = true; }
+      else if (!shown) status.textContent = what;
     };
-    try { new Function("THREE", "renderer", "canvas", code.value)(THREE, renderer, canvas); }
+    try { new Function("THREE", "renderer", "canvas", "orbit", code.value)(THREE, renderer, canvas, orbit); }
     catch (e) { status.className = "err"; status.textContent = String(e && e.stack || e); }
   }
   sel.onchange = function () { load(sel.value); };

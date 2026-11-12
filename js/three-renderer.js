@@ -54,6 +54,8 @@
     this.info.render.frame++;
     this.info.render.calls = 1;
     this.info.render.triangles = this._soft.triangles;
+    this.info.render.lines = this._soft.lines;
+    this.info.render.points = this._soft.points;
     this._present();
   };
   // the pixel buffer as RGBA bytes
