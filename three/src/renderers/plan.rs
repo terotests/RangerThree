@@ -198,8 +198,9 @@ pub fn plan_frame(scene: &ObjectRef, camera: &ObjectRef, clear_color: &Color, cl
 /// color.rgb, opacity | emissive.rgb, alpha_test |
 /// specular.rgb, shininess | diffuse_scale, lit, specular_on, mode |
 /// side (0 front, 1 back, 2 double), flat, vertex_colors, fog |
-/// roughness (clamped as three.js), metalness, physical (GGX), 0.
-/// mode: 0 plain, 1 toon, 2 normal, 3 depth.
+/// roughness, metalness (as set; the shader applies the maps and clamps),
+/// physical (GGX), 0.
+/// mode: 0 plain, 1 toon, 2 normal, 3 depth, 4 matcap.
 pub fn material_uniforms(m: &Material) -> Vec<f64> {
     let s = surface_of(m);
     let mode = if m.kind == MaterialKind::MeshToon {
@@ -208,6 +209,8 @@ pub fn material_uniforms(m: &Material) -> Vec<f64> {
         2.0
     } else if m.kind == MaterialKind::MeshDepth {
         3.0
+    } else if m.kind == MaterialKind::MeshMatcap {
+        4.0
     } else {
         0.0
     };
@@ -237,8 +240,8 @@ pub fn material_uniforms(m: &Material) -> Vec<f64> {
         if m.flat_shading { 1.0 } else { 0.0 },
         if m.vertex_colors { 1.0 } else { 0.0 },
         if m.fog { 1.0 } else { 0.0 },
-        s.roughness,
-        s.metalness,
+        m.roughness,
+        m.metalness,
         if s.physical { 1.0 } else { 0.0 },
         0.0,
     ]
