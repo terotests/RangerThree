@@ -651,7 +651,7 @@ impl Object3D {
     }
 
     /// The rotation as Euler angles in `rotation_order`.
-    pub fn rotation(&self) -> Euler {
+    pub fn rotation_euler(&self) -> Euler {
         let mut e = Euler::default();
         e.set_from_quaternion(&self.quaternion, self.rotation_order);
         e

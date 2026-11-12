@@ -22,13 +22,7 @@ impl Vector2 {
         Vector2 { x, y }
     }
 
-    pub fn width(&self) -> f64 {
-        self.x
-    }
 
-    pub fn height(&self) -> f64 {
-        self.y
-    }
 
     pub fn set(&mut self, x: f64, y: f64) -> &mut Vector2 {
         self.x = x;

@@ -5,6 +5,7 @@
 #![allow(unused_imports)]
 
 pub mod core;
+pub mod geometries;
 pub mod materials;
 pub mod maths;
 pub mod scenes;

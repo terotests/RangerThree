@@ -6,7 +6,7 @@
 set -euo pipefail
 THREE_VERSION="0.185.1"
 R3F_VERSION="9.8.2"
-ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DEST="$ROOT/tmp/three-ref"
 [[ -f "$DEST/three/build/three.module.js" && -f "$DEST/.v-$THREE_VERSION" ]] && { echo "three@$THREE_VERSION in $DEST"; exit 0; }
 rm -rf "$DEST"; mkdir -p "$DEST"; cd "$DEST"

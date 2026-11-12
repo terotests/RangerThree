@@ -242,7 +242,7 @@ impl Material {
             reflectivity: 1.0,
             refraction_ratio: 0.98,
             combine: 0,
-            specular: Color::new(0.0666666666666667, 0.0666666666666667, 0.0666666666666667),
+            specular: Color::from_hex(0x111111),
             shininess: 30.0,
             roughness: 1.0,
             metalness: 0.0,
@@ -312,14 +312,14 @@ impl Material {
         self.version += 1;
     }
 
-    /// Copies every property (the textures are shared, as three.js does).
-    pub fn copy(&mut self, source: &Material) {
-        let id = self.id;
-        let uuid = self.uuid.clone();
-        let version = self.version;
-        *self = source.clone();
-        self.id = id;
-        self.uuid = uuid;
-        self.version = version;
+    /// A copy of `source` that keeps this material's id, uuid and version
+    /// (three.js's `copy`; the textures are shared). Use as
+    /// `*m = m.copied_from(&source)`.
+    pub fn copied_from(&self, source: &Material) -> Material {
+        let mut m = source.clone();
+        m.id = self.id;
+        m.uuid = self.uuid.clone();
+        m.version = self.version;
+        m
     }
 }

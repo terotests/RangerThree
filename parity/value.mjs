@@ -24,12 +24,13 @@ function sources() {
     "var window = globalThis;",
     fs.readFileSync(path.join(ROOT, "build/rangerthree-core.js"), "utf8"),
     fs.readFileSync(path.join(ROOT, "js/three.js"), "utf8"),
+    fs.readFileSync(path.join(ROOT, "js/three-scene.js"), "utf8"),
     fs.readFileSync(path.join(PARITY, "probe-prelude.js"), "utf8"),
   ];
 }
 
 function runNode(probes) {
-  const ctx = vm.createContext({ console, Float32Array, Uint16Array, Uint32Array, Int8Array, Int16Array, Int32Array, Uint8Array, Float64Array, TextEncoder, TextDecoder });
+  const ctx = vm.createContext({ console, Float32Array, Uint16Array, Uint32Array, Int8Array, Int16Array, Int32Array, Uint8Array, Uint8ClampedArray, Float64Array, TextEncoder, TextDecoder });
   vm.runInContext(sources().join("\n"), ctx, { filename: "three-parity.js" });
   const out = {};
   for (const p of probes) {
@@ -66,7 +67,7 @@ function runCerxes(probes) {
 const golden = JSON.parse(fs.readFileSync(path.join(PARITY, "goldens/value.json"), "utf8")).values;
 let probes = valueProbes();
 const grep = opt("grep");
-if (grep) probes = probes.filter((p) => p.id.includes(grep));
+if (grep) { const re = new RegExp(grep); probes = probes.filter((p) => re.test(p.id)); }
 const engine = opt("cerxes") ? "cerxes" : "node";
 const got = engine === "cerxes" ? runCerxes(probes) : runNode(probes);
 const byClass = {};

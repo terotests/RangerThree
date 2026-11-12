@@ -14,29 +14,44 @@ impl Default for Layers {
     }
 }
 
+/// `x` as a signed 32-bit number, as JavaScript's bitwise operators leave
+/// it (three.js's masks are those: all layers is -1).
+fn wrap32(x: i64) -> i64 {
+    let v = x & 0xffffffff;
+    if v >= 0x80000000 {
+        v - 0x100000000
+    } else {
+        v
+    }
+}
+
+fn bit(layer: i64) -> i64 {
+    wrap32(1 << (layer & 31))
+}
+
 impl Layers {
     pub fn new() -> Layers {
         Layers { mask: 1 }
     }
 
     pub fn set(&mut self, layer: i64) {
-        self.mask = (1 << layer) & 0xffffffff;
+        self.mask = bit(layer);
     }
 
     pub fn enable(&mut self, layer: i64) {
-        self.mask = (self.mask | (1 << layer)) & 0xffffffff;
+        self.mask = wrap32(self.mask | bit(layer));
     }
 
     pub fn enable_all(&mut self) {
-        self.mask = 0xffffffff;
+        self.mask = -1;
     }
 
     pub fn toggle(&mut self, layer: i64) {
-        self.mask = (self.mask ^ (1 << layer)) & 0xffffffff;
+        self.mask = wrap32(self.mask ^ bit(layer));
     }
 
     pub fn disable(&mut self, layer: i64) {
-        self.mask = self.mask & !(1 << layer) & 0xffffffff;
+        self.mask = wrap32(self.mask & !bit(layer));
     }
 
     pub fn disable_all(&mut self) {
@@ -48,6 +63,6 @@ impl Layers {
     }
 
     pub fn is_enabled(&self, layer: i64) -> bool {
-        (self.mask & (1 << layer)) != 0
+        (self.mask & bit(layer)) != 0
     }
 }

@@ -37,8 +37,10 @@ var THREE = (function (R) {
     var p = C.prototype;
     Object.getOwnPropertyNames(p).forEach(function (k) {
       if (k.indexOf("_") > 0 && k.slice(0, 3) !== "rs_") {
+        var d = Object.getOwnPropertyDescriptor(p, k);
+        if (typeof d.value !== "function") return;
         var c = camel(k);
-        if (!Object.prototype.hasOwnProperty.call(p, c)) def(p, c, p[k]);
+        if (!Object.prototype.hasOwnProperty.call(p, c)) def(p, c, d.value);
       }
     });
     if (p.rs_clone && !Object.prototype.hasOwnProperty.call(p, "clone")) def(p, "clone", p.rs_clone);
@@ -223,6 +225,7 @@ var THREE = (function (R) {
     var dec = p.decompose;
     def(p, "decompose", function (position, quaternion, scale) {
       var t = dec.call(this);
+      if (position === undefined) return t; // the crate's own call
       position.copy(t.position); quaternion.copy(t.quaternion); scale.copy(t.scale);
       return this;
     });
@@ -543,9 +546,15 @@ var THREE = (function (R) {
     (function () {
     var p = T.Frustum.prototype;
     var st = p.set;
-    def(p, "set", function (a, b, c, d, e, f) { return st.call(this, [a, b, c, d, e, f]); });
+    def(p, "set", function (a, b, c, d, e, f) { return st.call(this, Array.isArray(a) ? a : [a, b, c, d, e, f]); });
   })();
 
+  // the helpers js/three-scene.js builds on
+  def(T, "__facade", {
+    camel: camel, def: def, accessor: accessor, aliases: aliases, make: make, flag: flag,
+    intoTarget: intoTarget, eulerCore: eulerCore, orderIndex: orderIndex, ORDERS: ORDERS,
+    rng: rng, kindOf: kindOf, KINDS: KINDS, space: space
+  });
   return T;
 })(RangerThreeCore);
 if (typeof window !== "undefined") window.THREE = THREE;
