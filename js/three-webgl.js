@@ -94,7 +94,8 @@
     "  }\n" +
     "  gl_PointSize = max(1.0, u_sizeAtt == 1 ? u_pointSize * u_pointScale / max(-vp.z, 1e-4) : u_pointSize);\n" +
     "}\n";
-  var FS = "#version 300 es\n" +
+  // the fragment shader after its #version line and SHADOW_TYPE (1 PCF, 2 basic, 3 VSM)
+  var FS_BODY = "" +
     "precision highp float;\n" +
     "in vec3 v_world; in vec3 v_normal; in vec2 v_uv; in vec2 v_uv0; in vec3 v_color; in float v_depth; in float v_lineDist;\n" +
     "uniform int u_dashed;\n" +
@@ -120,6 +121,18 @@
     "uniform sampler2D u_dfg;\n" +
     "uniform vec4 u_lights[" + (MAX_LIGHTS * 7) + "];\n" +
     "uniform sampler2D u_ltc1, u_ltc2;\n" +
+    // shadow maps: slots 0-2 directional/spot (2D), slot 3 point (cube)
+    "#if SHADOW_TYPE == 3\n" +
+    "uniform sampler2D u_sh0, u_sh1, u_sh2;\n" +
+    "uniform samplerCube u_shc0;\n" +
+    "#else\n" +
+    "uniform highp sampler2DShadow u_sh0, u_sh1, u_sh2;\n" +
+    "uniform highp samplerCubeShadow u_shc0;\n" +
+    "#endif\n" +
+    "uniform mat4 u_shMat[4];\n" +
+    "uniform vec4 u_shParam[4];\n" +
+    "uniform vec4 u_shSize[4];\n" +
+    "uniform int u_receive;\n" +
     "uniform int u_nlights;\n" +
     "uniform vec4 u_fog[2];\n" +
     "uniform vec3 u_cam;\n" +
@@ -161,6 +174,58 @@
     "  vec3 f = ltcEdge(c0, c1) + ltcEdge(c1, c2) + ltcEdge(c2, c3) + ltcEdge(c3, c0);\n" +
     "  float l = length(f); return max((l * l + f.z) / (l + 1.0), 0.0);\n" +
     "}\n" +
+    // shadows as three.js reads them (shadowmap_pars_fragment): PCF with five Vogel-disk taps turned by
+    // interleaved gradient noise, basic, or VSM; u_shParam = intensity, bias, normal bias, radius;
+    // u_shSize = map width, height, near, far
+    "float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }\n" +
+    "vec2 vogel(int i, float phi) { float r = sqrt((float(i) + 0.5) / 5.0); float t = float(i) * 2.399963229728653 + phi; return vec2(cos(t), sin(t)) * r; }\n" +
+    "#if SHADOW_TYPE == 3\n" +
+    "vec2 shRG(int i, vec2 p) { if (i == 0) return texture(u_sh0, p).rg; if (i == 1) return texture(u_sh1, p).rg; return texture(u_sh2, p).rg; }\n" +
+    "#else\n" +
+    "float shTap(int i, vec3 p) { if (i == 0) return texture(u_sh0, p); if (i == 1) return texture(u_sh1, p); return texture(u_sh2, p); }\n" +
+    "#endif\n" +
+    "float shadowAt(int slot, vec3 nrm) {\n" +
+    "  vec4 pr = u_shParam[slot], sz = u_shSize[slot];\n" +
+    "  vec4 sc = u_shMat[slot] * vec4(v_world + nrm * pr.z, 1.0);\n" +
+    "  float shadow = 1.0;\n" +
+    "  if (slot == 3) {\n" +
+    "#if SHADOW_TYPE != 3\n" +
+    "    vec3 av = abs(sc.xyz); float vz = max(max(av.x, av.y), av.z);\n" +
+    "    if (vz - sz.w <= 0.0 && vz - sz.z >= 0.0) {\n" +
+    "      float dp = (sz.w * (vz - sz.z)) / (vz * (sz.w - sz.z)) + pr.y;\n" +
+    "      vec3 bd = normalize(sc.xyz);\n" +
+    "#if SHADOW_TYPE == 1\n" +
+    "      float texel = pr.w / sz.x; vec3 ad = abs(bd);\n" +
+    "      vec3 tg = normalize(cross(bd, ad.x > ad.z ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0))); vec3 bt = cross(bd, tg);\n" +
+    "      float phi = ign(gl_FragCoord.xy) * 6.283185307179586;\n" +
+    "      shadow = 0.0;\n" +
+    "      for (int k = 0; k < 5; k++) { vec2 o = vogel(k, phi); shadow += texture(u_shc0, vec4(bd + (tg * o.x + bt * o.y) * texel, dp)); }\n" +
+    "      shadow *= 0.2;\n" +
+    "#else\n" +
+    "      shadow = texture(u_shc0, vec4(bd, dp));\n" +
+    "#endif\n" +
+    "    }\n" +
+    "#endif\n" +
+    "  } else {\n" +
+    "    sc.xyz /= sc.w; sc.z += pr.y;\n" +
+    "    if (sc.x >= 0.0 && sc.x <= 1.0 && sc.y >= 0.0 && sc.y <= 1.0 && sc.z <= 1.0) {\n" +
+    "#if SHADOW_TYPE == 1\n" +
+    "      float rad = pr.w / sz.x, phi = ign(gl_FragCoord.xy) * 6.283185307179586;\n" +
+    "      shadow = 0.0;\n" +
+    "      for (int k = 0; k < 5; k++) shadow += shTap(slot, vec3(sc.xy + vogel(k, phi) * rad, sc.z));\n" +
+    "      shadow *= 0.2;\n" +
+    "#elif SHADOW_TYPE == 2\n" +
+    "      shadow = shTap(slot, sc.xyz);\n" +
+    "#else\n" +
+    "      vec2 ds = shRG(slot, sc.xy); float mean = ds.x, variance = ds.y * ds.y;\n" +
+    "      float hard = step(sc.z, mean);\n" +
+    "      if (hard == 1.0) shadow = 1.0;\n" +
+    "      else { variance = max(variance, 0.0000001); float d = sc.z - mean; float pm = clamp((variance / (variance + d * d) - 0.3) / 0.65, 0.0, 1.0); shadow = max(hard, pm); }\n" +
+    "#endif\n" +
+    "    }\n" +
+    "  }\n" +
+    "  return mix(1.0, shadow, pr.x);\n" +
+    "}\n" +
     "float sheenAlbedo(float nv, float r) { float r2 = r * r, ri = 1.0 / (r + 0.1); float a = -1.9362 + 1.0678 * r + 0.4573 * r2 - 0.8469 * ri; float b = -0.6014 + 0.5538 * r - 0.4670 * r2 - 0.1255 * ri; return clamp(exp(a * clamp(nv, 0.0, 1.0) + b), 0.0, 1.0); }\n" +
     "vec2 tuv(int i) { return (u_t[i] * vec3(v_uv0, 1.0)).xy; }\n" +
     "void main() {\n" +
@@ -182,6 +247,7 @@
     "  if (c4.y > 0.5 || u_hasNormal == 0) n = normalize(cross(dFdx(v_world), dFdy(v_world)));\n" +
     "  else { n = normalize(v_normal); if (!gl_FrontFacing) n = -n; }\n" +
     "  vec3 n0 = n;\n" +
+    "  vec3 shN = u_hasNormal == 1 ? normalize(v_normal) : vec3(0.0, 0.0, 1.0);\n" +
     // tangent-space normal map without tangents (three.js's getTangentFrame)
     "  if (has(8)) {\n" +
     "    vec2 nuv = tuv(3);\n" +
@@ -214,6 +280,15 @@
     "  } else if (mode == 2) {\n" +
     "    vec3 vn = normalize((u_view * vec4(n, 0.0)).xyz);\n" +
     "    color = vn * 0.5 + 0.5;\n" +
+    "  } else if (mode == 5) {\n" +
+    // ShadowMaterial: its colour where the lights' shadows fall
+    "    float mask = 1.0;\n" +
+    "    for (int i = 0; i < " + MAX_LIGHTS + "; i++) {\n" +
+    "      if (i >= u_nlights) break;\n" +
+    "      int slot = int(u_lights[i * 7 + 4].z + 0.5) - 1;\n" +
+    "      if (slot >= 0 && u_receive == 1) mask *= shadowAt(slot, shN);\n" +
+    "    }\n" +
+    "    color = c0.rgb; alpha = c0.a * (1.0 - mask);\n" +
     "  } else if (mode == 4) {\n" +
     // MeshMatcapMaterial: the view-space normal picks the matcap texel
     "    vec3 vn = normalize((u_view * vec4(n, 0.0)).xyz);\n" +
@@ -272,6 +347,7 @@
     "          k *= e * e * (3.0 - 2.0 * e);\n" +
     "        }\n" +
     "      }\n" +
+    "      if (directional) { int slot = int(l4.z + 0.5) - 1; if (slot >= 0 && u_receive == 1) c *= shadowAt(slot, shN); }\n" +
     "      vec3 diffuse = vec3(1.0); float shComp = 1.0;\n" +
     "      if (directional) {\n" +
     "        float nl = dot(n, dir);\n" +
@@ -357,9 +433,10 @@
     { prop: "metalnessMap", uniform: "u_metalMap", unit: 5, bit: 4, t: 2 },
     { prop: "normalMap", uniform: "u_normalMap", unit: 6, bit: 8, t: 3 },
     { prop: "aoMap", uniform: "u_aoMap", unit: 7, bit: 16, t: 4 },
-    { prop: "matcap", uniform: "u_matcap", unit: 8, bit: 32, t: -1 },
-    { prop: "gradientMap", uniform: "u_gradMap", unit: 9, bit: 64, t: -1 },
-    { prop: "bumpMap", uniform: "u_bumpMap", unit: 13, bit: 128, t: 5 }
+    // matcap, gradient and bump maps share units with maps their materials cannot have at once
+    { prop: "matcap", uniform: "u_matcap", unit: 4, bit: 32, t: -1 },
+    { prop: "gradientMap", uniform: "u_gradMap", unit: 5, bit: 64, t: -1 },
+    { prop: "bumpMap", uniform: "u_bumpMap", unit: 6, bit: 128, t: 5 }
   ];
   // three.js blend constants -> GL
   var EQUATIONS = { 100: 32774, 101: 32778, 102: 32779, 103: 32775, 104: 32776 };
@@ -376,22 +453,18 @@
     return s;
   }
 
+  var NAMES = ["u_model", "u_view", "u_proj", "u_uvt", "u_instanced", "u_pointSize", "u_pointScale", "u_sizeAtt", "u_mat", "u_lights",
+    "u_nlights", "u_fog", "u_cam", "u_map", "u_hasMap", "u_points", "u_hasNormal", "u_opaque", "u_tone", "u_exposure", "u_sprite", "u_center", "u_rotation", "u_emap", "u_hasEmap", "u_euvt", "u_dfg",
+    "u_alphaMap", "u_roughMap", "u_metalMap", "u_normalMap", "u_aoMap", "u_matcap", "u_gradMap", "u_maps", "u_linearOut", "u_premult", "u_t", "u_normalScale", "u_aoIntensity",
+    "u_dispMap", "u_hasDisp", "u_dispT", "u_dispScale", "u_dispBias", "u_dashScale", "u_dashed", "u_dashSize", "u_dashTotal", "u_bumpScale", "u_bumpMap", "u_sheen",
+    "u_trans", "u_attColor", "u_transMap", "u_transSize", "u_ltc1", "u_ltc2",
+    "u_sh0", "u_sh1", "u_sh2", "u_shc0", "u_shMat", "u_shParam", "u_shSize", "u_receive"];
+
   function Backend(gl, renderer) {
     this.gl = gl;
     this.renderer = renderer;
-    var prog = gl.createProgram();
-    gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VS));
-    gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FS));
-    gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error("WebGL2 program: " + gl.getProgramInfoLog(prog));
-    this.prog = prog;
-    var names = ["u_model", "u_view", "u_proj", "u_uvt", "u_instanced", "u_pointSize", "u_pointScale", "u_sizeAtt", "u_mat", "u_lights",
-      "u_nlights", "u_fog", "u_cam", "u_map", "u_hasMap", "u_points", "u_hasNormal", "u_opaque", "u_tone", "u_exposure", "u_sprite", "u_center", "u_rotation", "u_emap", "u_hasEmap", "u_euvt", "u_dfg",
-      "u_alphaMap", "u_roughMap", "u_metalMap", "u_normalMap", "u_aoMap", "u_matcap", "u_gradMap", "u_maps", "u_linearOut", "u_premult", "u_t", "u_normalScale", "u_aoIntensity",
-      "u_dispMap", "u_hasDisp", "u_dispT", "u_dispScale", "u_dispBias", "u_dashScale", "u_dashed", "u_dashSize", "u_dashTotal", "u_bumpScale", "u_bumpMap", "u_sheen",
-      "u_trans", "u_attColor", "u_transMap", "u_transSize", "u_ltc1", "u_ltc2"];
-    this.u = {};
-    for (var i = 0; i < names.length; i++) this.u[names[i]] = gl.getUniformLocation(prog, names[i]);
+    this.mains = {};
+    this.useMain(1);
     this.buffers = new WeakMap();   // attribute -> { buf, version }
     this.wire = new WeakMap();      // geometry -> { buf, count, key }
     this.textures = new WeakMap();  // texture -> { tex, version }
@@ -424,6 +497,14 @@
     });
   }
   var B = Backend.prototype;
+
+  // the main program for a shadow type (1 PCF, also without shadows; 2 basic; 3 VSM), compiled on first use
+  B.useMain = function (type) {
+    var m = this.mains[type];
+    if (!m) m = this.mains[type] = program(this.gl, VS, "#version 300 es\n#define SHADOW_TYPE " + type + "\n" + FS_BODY, NAMES);
+    this.prog = m.prog;
+    this.u = m.u;
+  };
 
   // a GPU buffer holding `attr`, re-uploaded when its version changes
   B.buffer = function (attr, target) {
@@ -593,6 +674,27 @@
     "  c.rgb = max(c.rgb, 0.0);\n" +
     "  if (u_linearOut == 0) c.rgb = toSrgb(c.rgb);\n" +
     "  o_color = c;\n" +
+    "}\n";
+
+  // VSM: the depth map blurred into mean and deviation, vertically then horizontally (three.js's vsm.glsl)
+  var VSM_FS = "#version 300 es\n" +
+    "precision highp float;\n" +
+    "uniform sampler2D u_src;\n" +
+    "uniform vec2 u_res;\n" +
+    "uniform float u_radius, u_samples;\n" +
+    "uniform int u_horizontal;\n" +
+    "out vec4 o_color;\n" +
+    "void main() {\n" +
+    "  float mean = 0.0, sq = 0.0;\n" +
+    "  float stride = u_samples <= 1.0 ? 0.0 : 2.0 / (u_samples - 1.0), start = u_samples <= 1.0 ? 0.0 : -1.0;\n" +
+    "  for (float i = 0.0; i < 64.0; i++) {\n" +
+    "    if (i >= u_samples) break;\n" +
+    "    float off = start + i * stride;\n" +
+    "    if (u_horizontal == 1) { vec2 d = texture(u_src, (gl_FragCoord.xy + vec2(off, 0.0) * u_radius) / u_res).rg; mean += d.x; sq += d.y * d.y + d.x * d.x; }\n" +
+    "    else { float z = texture(u_src, (gl_FragCoord.xy + vec2(0.0, off) * u_radius) / u_res).r; mean += z; sq += z * z; }\n" +
+    "  }\n" +
+    "  mean /= u_samples; sq /= u_samples;\n" +
+    "  o_color = vec4(mean, sqrt(max(0.0, sq - mean * mean)), 0.0, 1.0);\n" +
     "}\n";
 
   function program(gl, vs, fs, names) {
@@ -807,10 +909,175 @@
     gl.uniform2f(u.u_transSize, w, h);
   };
 
+  // a depth texture for a shadow map: 2D or cube, compared (PCF, basic) or plain (VSM)
+  function depthTexture(gl, cube, size, w, h, type) {
+    var t = gl.createTexture(), target = cube ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_2D;
+    gl.bindTexture(target, t);
+    var fmt = type === 3 ? gl.DEPTH_COMPONENT32F : gl.DEPTH_COMPONENT24, ty = type === 3 ? gl.FLOAT : gl.UNSIGNED_INT;
+    if (cube) for (var f = 0; f < 6; f++) gl.texImage2D(gl.TEXTURE_CUBE_MAP_POSITIVE_X + f, 0, fmt, size, size, 0, gl.DEPTH_COMPONENT, ty, null);
+    else gl.texImage2D(gl.TEXTURE_2D, 0, fmt, w, h, 0, gl.DEPTH_COMPONENT, ty, null);
+    var filter = type === 1 ? gl.LINEAR : gl.NEAREST;
+    gl.texParameteri(target, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(target, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(target, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(target, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    if (type !== 3) {
+      gl.texParameteri(target, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+      gl.texParameteri(target, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+    }
+    gl.bindTexture(target, null);
+    return t;
+  }
+
+  function colorTarget(gl, w, h, half, filter) {
+    var t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, half ? gl.RG16F : gl.RGBA8, w, h, 0, half ? gl.RG : gl.RGBA, half ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    return t;
+  }
+
+  var SHADOW_UNITS = [8, 9, 13, 15];
+
+  // every shadow sampler needs a texture of its kind bound even when no light
+  // uses it (an empty unit reads as a colour texture, which a shadow sampler
+  // rejects), and none may hold a map that is being rendered: 1x1 compared
+  // depth textures for PCF and basic, nothing for VSM's plain samplers
+  B.bindShadowDummies = function (type) {
+    var gl = this.gl;
+    if (!this.shDummy) this.shDummy = { flat: depthTexture(gl, false, 1, 1, 1, 1), cube: depthTexture(gl, true, 1, 1, 1, 1) };
+    for (var i = 0; i < 4; i++) {
+      gl.activeTexture(gl.TEXTURE0 + SHADOW_UNITS[i]);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
+      if (type !== 3) gl.bindTexture(i === 3 ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_2D, i === 3 ? this.shDummy.cube : this.shDummy.flat);
+    }
+    gl.activeTexture(gl.TEXTURE0);
+  };
+
+  // the shadow maps of this frame (three.js's WebGLShadowMap): depth from each
+  // shadow camera of the casters (back faces of front-sided materials, as
+  // three.js draws them), point lights into six cube faces, VSM blurred.
+  // Returns the slot of each light index (2D slots 0-2, the point light 3).
+  B.renderShadows = function (scene, plan, type) {
+    var gl = this.gl, u = this.u, slots = {};
+    var plans = R.RenderersPlan.shadow_plans(scene);
+    if (!plans.length) return slots;
+    var casters = [];
+    for (var i = 0; i < plan.items.length; i++) {
+      var it = plan.items[i], o = it.object;
+      if (it.kind >= 1 && it.kind <= 6 && (o.castShadow || (type === 3 && o.receiveShadow))) casters.push(it);
+    }
+    this.shadowRes = this.shadowRes || [];
+    this.shadowData = this.shadowData || { mat: new Float32Array(64), param: new Float32Array(16), size: new Float32Array(16) };
+    var next2d = 0, usedPoint = false, half = !!gl.getExtension("EXT_color_buffer_float");
+    var info = { triangles: 0, lines: 0, points: 0, calls: 0 };
+    gl.useProgram(this.prog);
+    gl.bindVertexArray(this.vao);
+    gl.uniform1i(u.u_nlights, 0);
+    this.shadowPass = type;
+    for (var p = 0; p < plans.length; p++) {
+      var sp = plans[p], point = sp.kind === 3, slot;
+      if (point) { if (usedPoint || type === 3) continue; slot = 3; usedPoint = true; }
+      else { if (next2d > 2) continue; slot = next2d++; }
+      var w = sp.map_width | 0, h = sp.map_height | 0, size = w;
+      var res = this.shadowRes[slot];
+      if (!res || res.w !== w || res.h !== h || res.type !== type || res.point !== point) {
+        if (res) { gl.deleteTexture(res.depth); if (res.map) gl.deleteTexture(res.map); if (res.pass) gl.deleteTexture(res.pass); }
+        res = this.shadowRes[slot] = { w: w, h: h, type: type, point: point, fbo: res ? res.fbo : gl.createFramebuffer(), depth: depthTexture(gl, point, size, w, h, type) };
+        if (type === 3) { res.pass = colorTarget(gl, w, h, half, gl.LINEAR); res.map = colorTarget(gl, w, h, half, gl.LINEAR); }
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, res.fbo);
+      gl.uniformMatrix4fv(u.u_proj, false, sp.projection.elements);
+      var faces = point ? 6 : 1;
+      for (var f = 0; f < faces; f++) {
+        if (point) gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_CUBE_MAP_POSITIVE_X + f, res.depth, 0);
+        else gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, res.depth, 0);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+        gl.drawBuffers([gl.NONE]);
+        gl.viewport(0, 0, point ? size : w, point ? size : h);
+        gl.depthMask(true);
+        gl.clear(gl.DEPTH_BUFFER_BIT);
+        gl.uniformMatrix4fv(u.u_view, false, sp.views[f].elements);
+        for (var c = 0; c < casters.length; c++) this.draw(casters[c], info, null);
+      }
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+      if (type === 3) this.vsmBlur(res, sp);
+      // the receivers' side of it
+      var d = this.shadowData;
+      d.mat.set(sp.matrix.elements, slot * 16);
+      d.param[slot * 4] = sp.intensity; d.param[slot * 4 + 1] = sp.bias; d.param[slot * 4 + 2] = sp.normal_bias; d.param[slot * 4 + 3] = sp.radius;
+      d.size[slot * 4] = point ? size : w; d.size[slot * 4 + 1] = point ? size : h; d.size[slot * 4 + 2] = sp.near; d.size[slot * 4 + 3] = sp.far;
+      slots[sp.light] = slot;
+      gl.activeTexture(gl.TEXTURE0 + SHADOW_UNITS[slot]);
+      gl.bindTexture(point ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_2D, type === 3 ? res.map : res.depth);
+      gl.activeTexture(gl.TEXTURE0);
+    }
+    this.shadowPass = 0;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return slots;
+  };
+
+  B.vsmBlur = function (res, sp) {
+    var gl = this.gl;
+    if (!this.vsm) this.vsm = program(gl, FULL_VS, VSM_FS, ["u_src", "u_res", "u_radius", "u_samples", "u_horizontal"]);
+    var v = this.vsm, u = v.u;
+    gl.useProgram(v.prog);
+    gl.bindVertexArray(this.emptyVao);
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.disable(gl.CULL_FACE);
+    gl.uniform1i(u.u_src, 0);
+    gl.uniform2f(u.u_res, res.w, res.h);
+    gl.uniform1f(u.u_radius, sp.radius);
+    gl.uniform1f(u.u_samples, sp.blur_samples);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, null, 0);
+    var steps = [[res.depth, res.pass, 0], [res.pass, res.map, 1]];
+    for (var i = 0; i < 2; i++) {
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, steps[i][1], 0);
+      gl.viewport(0, 0, res.w, res.h);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, steps[i][0]);
+      gl.uniform1i(u.u_horizontal, steps[i][2]);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
+    gl.useProgram(this.prog);
+    gl.bindVertexArray(this.vao);
+    gl.enable(gl.DEPTH_TEST);
+  };
+
+  // the texture unit of every sampler of the main program
+  B.setUnits = function (u) {
+    var gl = this.gl;
+    gl.uniform1i(u.u_map, 0);
+    gl.uniform1i(u.u_emap, 1);
+    gl.uniform1i(u.u_dfg, 2);
+    for (var mi = 0; mi < MAPS.length; mi++) gl.uniform1i(u[MAPS[mi].uniform], MAPS[mi].unit);
+    gl.uniform1i(u.u_dispMap, 12);
+    gl.uniform1i(u.u_ltc1, 10);
+    gl.uniform1i(u.u_ltc2, 11);
+    gl.uniform1i(u.u_transMap, 14);
+    gl.uniform1i(u.u_sh0, SHADOW_UNITS[0]);
+    gl.uniform1i(u.u_sh1, SHADOW_UNITS[1]);
+    gl.uniform1i(u.u_sh2, SHADOW_UNITS[2]);
+    gl.uniform1i(u.u_shc0, SHADOW_UNITS[3]);
+  };
+
   B.render = function (scene, camera) {
-    var gl = this.gl, u = this.u, r = this.renderer, soft = r._soft;
+    var gl = this.gl, r = this.renderer, soft = r._soft;
     var plan = R.RenderersPlan.plan_frame(scene, camera, soft.clear_color, soft.clear_alpha);
     var w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    // shadow type (three.js: 0 basic, 1 PCF, 2 PCF soft = PCF, 3 VSM) -> 2, 1, 3; 0 none
+    var sm = r.shadowMap, stype = sm && sm.enabled ? (sm.type === 0 ? 2 : sm.type === 3 ? 3 : 1) : 0;
+    this.useMain(stype || 1);
+    var u = this.u;
+    gl.useProgram(this.prog);
+    this.setUnits(u);
+    this.bindShadowDummies(stype || 1);
+    var slots = stype ? this.renderShadows(scene, plan, stype) : {};
     gl.viewport(0, 0, w, h);
     var linearOut = r.outputColorSpace === "srgb-linear";
     var cl = plan.clear, s = linearOut ? function (x) { return x; } : R.MathsColor.linear_to_srgb;
@@ -832,25 +1099,22 @@
     var n = Math.min(MAX_LIGHTS, plan.light_count);
     this.lightData.fill(0);
     for (var i = 0; i < n * 28; i++) this.lightData[i] = plan.lights[i];
+    for (var li0 in slots) if (li0 < n) this.lightData[li0 * 28 + 18] = slots[li0] + 1;
+    if (this.shadowData) {
+      gl.uniformMatrix4fv(u.u_shMat, false, this.shadowData.mat);
+      gl.uniform4fv(u.u_shParam, this.shadowData.param);
+      gl.uniform4fv(u.u_shSize, this.shadowData.size);
+    }
     gl.uniform4fv(u.u_lights, this.lightData);
     gl.uniform1i(u.u_nlights, n);
     gl.uniform4fv(u.u_fog, plan.fog);
     gl.uniform1f(u.u_pointScale, h * 0.5);
     gl.uniform1f(u.u_exposure, r.toneMappingExposure === undefined ? 1 : r.toneMappingExposure);
-    gl.uniform1i(u.u_map, 0);
-    gl.uniform1i(u.u_emap, 1);
-    gl.uniform1i(u.u_dfg, 2);
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.dfg);
-    gl.activeTexture(gl.TEXTURE0);
-    for (var mi = 0; mi < MAPS.length; mi++) gl.uniform1i(u[MAPS[mi].uniform], MAPS[mi].unit);
-    gl.uniform1i(u.u_dispMap, 12);
-    gl.uniform1i(u.u_ltc1, 10);
-    gl.uniform1i(u.u_ltc2, 11);
     gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, this.ltc[0]);
     gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D, this.ltc[1]);
     gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1i(u.u_transMap, 14);
     gl.uniform1i(u.u_linearOut, linearOut ? 1 : 0);
     this.linearOut = linearOut;
     var info = { triangles: 0, lines: 0, points: 0, calls: 0 };
@@ -1018,7 +1282,7 @@
     var bits = 0;
     for (var mi = 0; mi < MAPS.length; mi++) {
       var spec = MAPS[mi], t = material[spec.prop];
-      if (!t) continue;
+      if (!t || (spec.bit === 128 && material.normalMap)) continue;
       gl.activeTexture(gl.TEXTURE0 + spec.unit);
       if (!this.texture(t)) continue;
       bits |= spec.bit;
@@ -1041,14 +1305,24 @@
     gl.uniform1f(u.u_pointSize, (material.size || 1) * this.renderer._pixelRatio);
     gl.uniform1i(u.u_sizeAtt, material.sizeAttenuation === false ? 0 : 1);
     gl.frontFace(o.matrixWorld.determinant() < 0 ? gl.CW : gl.CCW);
-    this.blend(material, opaque);
-    gl.depthMask(material.depthWrite !== false);
-    if (material.depthTest === false) gl.disable(gl.DEPTH_TEST);
-    else { gl.enable(gl.DEPTH_TEST); gl.depthFunc(DEPTH_FUNCS[material.depthFunc == null ? 3 : material.depthFunc] || gl.LEQUAL); }
-    var cw = material.colorWrite !== false;
-    gl.colorMask(cw, cw, cw, cw);
-    if (material.polygonOffset) { gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(material.polygonOffsetFactor || 0, material.polygonOffsetUnits || 0); }
-    else gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.uniform1i(u.u_receive, o.receiveShadow ? 1 : 0);
+    if (this.shadowPass) {
+      // the depth material three.js draws shadow casters with: depth only, no blending or offset
+      gl.disable(gl.BLEND);
+      gl.depthMask(true);
+      gl.enable(gl.DEPTH_TEST);
+      gl.depthFunc(gl.LEQUAL);
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+    } else {
+      this.blend(material, opaque);
+      gl.depthMask(material.depthWrite !== false);
+      if (material.depthTest === false) gl.disable(gl.DEPTH_TEST);
+      else { gl.enable(gl.DEPTH_TEST); gl.depthFunc(DEPTH_FUNCS[material.depthFunc == null ? 3 : material.depthFunc] || gl.LEQUAL); }
+      var cw = material.colorWrite !== false;
+      gl.colorMask(cw, cw, cw, cw);
+      if (material.polygonOffset) { gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(material.polygonOffsetFactor || 0, material.polygonOffsetUnits || 0); }
+      else gl.disable(gl.POLYGON_OFFSET_FILL);
+    }
     // the range: draw range, intersected with the group (three.js's renderBufferDirect)
     var index = geometry.index, total = index ? index.count : position.count;
     var range = geometry.drawRange || { start: 0, count: Infinity };
@@ -1063,7 +1337,11 @@
     else if (kind === 6) mode = gl.POINTS;
     // side; a transparent double-sided mesh is drawn back faces first, then front (three.js's two passes)
     var side = this.drawSide != null ? this.drawSide : mu[16], passes = [side];
-    if (mesh && side === 2 && material.transparent === true && material.forceSinglePass !== true) passes = [1, 0];
+    if (this.shadowPass) {
+      // shadow side: the material's shadowSide, else front <-> back (VSM keeps the side)
+      side = mu[23] >= 0 ? mu[23] : (this.shadowPass === 3 ? mu[16] : (mu[16] === 0 ? 1 : mu[16] === 1 ? 0 : 2));
+      passes = [side];
+    } else if (mesh && side === 2 && material.transparent === true && material.forceSinglePass !== true) passes = [1, 0];
     for (var p = 0; p < passes.length; p++) {
       if (!mesh || passes[p] === 2) gl.disable(gl.CULL_FACE);
       else { gl.enable(gl.CULL_FACE); gl.cullFace(passes[p] === 1 ? gl.FRONT : gl.BACK); }

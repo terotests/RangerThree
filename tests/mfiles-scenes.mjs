@@ -17,7 +17,8 @@ const files = { "/rangerthree.js": bundle, "/three.module.js": fs.readFileSync(p
 const { chromium } = createRequire(import.meta.url)("playwright");
 const browser = await chromium.launch({ args: ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"] });
 const page = await browser.newPage();
-page.on("pageerror", (e) => console.log("pageerror", e.message));
+page.on("pageerror", (e) => console.log("pageerror", e.message)); if (process.env.CON) page.on("console", (m) => console.log("console", m.text().slice(0, 400)));
+if (process.env.DBG) await page.addInitScript(() => { const P = WebGL2RenderingContext.prototype, d = P.drawElements; P.drawElements = function (...a) { d.apply(this, a); const e = this.getError(); if (e) { const units = []; for (let i = 0; i < 16; i++) { this.activeTexture(this.TEXTURE0 + i); units.push(i + ":" + (this.getParameter(this.TEXTURE_BINDING_2D) ? "2d" : "-") + (this.getParameter(this.TEXTURE_BINDING_CUBE_MAP) ? "c" : "")); } this.activeTexture(this.TEXTURE0); const pr = this.getParameter(this.CURRENT_PROGRAM), n = this.getProgramParameter(pr, this.ACTIVE_UNIFORMS), sm = []; for (let k = 0; k < n; k++) { const inf = this.getActiveUniform(pr, k); if (/SAMPLER/.test(Object.keys(WebGL2RenderingContext).find((q) => WebGL2RenderingContext[q] === inf.type) || "")) sm.push(inf.name + "@" + this.getUniform(pr, this.getUniformLocation(pr, inf.name)) + ":" + inf.type.toString(16)); } console.log("samplers " + sm.join(" ")); console.log("glerr " + e + " fbo " + !!this.getParameter(this.FRAMEBUFFER_BINDING) + " " + units.join(" ") + " " + new Error().stack.split("\n").slice(2, 5).join(" | ")); } }; });
 await page.route("http://parity.local/**", (route) => {
   const p = new URL(route.request().url()).pathname;
   if (p === "/") return route.fulfill({ contentType: "text/html", body: `<!doctype html><script type="importmap">{"imports":{"three":"/three.module.js"}}</script><script src="/rangerthree.js"></script><script type="module">import { render, makeRender } from "/r3f-ref.js"; window.__ref = render; window.__rt = makeRender(window.THREE, {});</script>` });
@@ -36,7 +37,7 @@ for (const it of SCENE_ITEMS) {
   const r = await page.evaluate(({ it, W, H }) => {
     const res = {};
     try { res.ref = Array.from(window.__ref(it, window.__tex, W, H).px); } catch (e) { res.err = "ref " + e.message; }
-    try { res.rt = Array.from(window.__rt(it, window.__tex, W, H).px); } catch (e) { res.err = "rt " + e.message; }
+    try { res.rt = Array.from(window.__rt(it, window.__tex, W, H).px); } catch (e) { res.err = "rt " + e.message + " @ " + String(e.stack).split("\n").slice(1, 4).join(" | "); }
     return res;
   }, { it, W, H });
   if (r.err) { rows.push([it.id, -1, r.err]); continue; }

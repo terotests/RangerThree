@@ -12,6 +12,7 @@ use crate::core::object3d::{descendants, update_matrix_world, Background, Object
 use crate::materials::material::{Material, MaterialKind, Side};
 use crate::maths::color::Color;
 use crate::maths::matrix4::Matrix4;
+use crate::maths::math_utils::RAD2DEG;
 use crate::maths::vector3::Vector3;
 use crate::renderers::soft::{collect_lights, surface_of};
 use crate::scenes::fog::FogKind;
@@ -245,13 +246,170 @@ pub fn plan_frame(scene: &ObjectRef, camera: &ObjectRef, clear_color: &Color, cl
     }
 }
 
+fn side_value(s: Side) -> f64 {
+    match s {
+        Side::Front => 0.0,
+        Side::Back => 1.0,
+        Side::Double => 2.0,
+    }
+}
+
+/// One shadow-casting light's shadow map: what to render it from and how
+/// receivers read it (three.js's LightShadow.updateMatrices and the point
+/// light's six faces).
+#[derive(Clone)]
+pub struct ShadowPlan {
+    /// index of the light in `RenderPlan::lights`
+    pub light: i64,
+    /// the light's kind: 2 directional, 3 point, 4 spot
+    pub kind: i64,
+    pub map_width: f64,
+    pub map_height: f64,
+    pub bias: f64,
+    pub normal_bias: f64,
+    pub radius: f64,
+    pub intensity: f64,
+    pub blur_samples: i64,
+    pub near: f64,
+    pub far: f64,
+    /// one view matrix, or six for a point light (+x, -x, +y, -y, +z, -z)
+    pub views: Vec<Matrix4>,
+    pub projection: Matrix4,
+    /// world to shadow-map coordinates (0..1), or for a point light the
+    /// translation to the light
+    pub matrix: Matrix4,
+}
+
+/// The view matrix of a camera at `eye` looking at `target`.
+fn view_towards(eye: &Vector3, target: &Vector3, up: &Vector3) -> Matrix4 {
+    let mut world = Matrix4::identity();
+    world.look_at(eye, target, up);
+    world.set_position(eye.x, eye.y, eye.z);
+    world.invert();
+    world
+}
+
+/// The shadow maps the lights of `scene` need, in the order of the plan's
+/// lights (call after `plan_frame`, which updates the world matrices).
+pub fn shadow_plans(scene: &ObjectRef) -> Vec<ShadowPlan> {
+    let objects = descendants(scene);
+    let mut out: Vec<ShadowPlan> = Vec::new();
+    let mut index: i64 = 0;
+    for o in objects.iter() {
+        let ob = o.borrow();
+        if !ob.visible {
+            continue;
+        }
+        let kind = match &ob.kind {
+            ObjectKind::AmbientLight(_) => 0,
+            ObjectKind::HemisphereLight(_) => 1,
+            ObjectKind::DirectionalLight(_) => 2,
+            ObjectKind::PointLight(_) => 3,
+            ObjectKind::SpotLight(_) => 4,
+            ObjectKind::RectAreaLight(_) => 5,
+            _ => -1,
+        };
+        if kind < 0 {
+            continue;
+        }
+        let l = match ob.light() {
+            Some(l) => l,
+            None => continue,
+        };
+        let light_index = index;
+        index += 1;
+        if !ob.cast_shadow || kind < 2 || kind > 4 {
+            continue;
+        }
+        let sh = match &l.shadow {
+            Some(sh) => sh,
+            None => continue,
+        };
+        let position = ob.world_position();
+        let mut cam = match sh.camera.borrow().camera() {
+            Some(c) => c.clone(),
+            None => continue,
+        };
+        let mut views: Vec<Matrix4> = Vec::new();
+        let mut matrix = Matrix4::identity();
+        if kind == 3 {
+            cam.fov = 90.0;
+            cam.aspect = 1.0;
+            if l.distance > 0.0 {
+                cam.far = l.distance;
+            }
+            cam.update_perspective();
+            let dirs: Vec<Vector3> = vec![
+                Vector3::new(1.0, 0.0, 0.0),
+                Vector3::new(-1.0, 0.0, 0.0),
+                Vector3::new(0.0, 1.0, 0.0),
+                Vector3::new(0.0, -1.0, 0.0),
+                Vector3::new(0.0, 0.0, 1.0),
+                Vector3::new(0.0, 0.0, -1.0),
+            ];
+            let ups: Vec<Vector3> = vec![
+                Vector3::new(0.0, -1.0, 0.0),
+                Vector3::new(0.0, -1.0, 0.0),
+                Vector3::new(0.0, 0.0, 1.0),
+                Vector3::new(0.0, 0.0, -1.0),
+                Vector3::new(0.0, -1.0, 0.0),
+                Vector3::new(0.0, -1.0, 0.0),
+            ];
+            for f in 0..6 {
+                let mut target = position;
+                target.add(&dirs[f]);
+                views.push(view_towards(&position, &target, &ups[f]));
+            }
+            matrix.make_translation(-position.x, -position.y, -position.z);
+        } else {
+            let mut target = Vector3::zero();
+            if let Some(t) = &l.target {
+                target.set_from_matrix_position(&t.borrow().matrix_world);
+            }
+            if kind == 4 {
+                cam.fov = RAD2DEG * 2.0 * l.angle;
+                cam.aspect = sh.map_size.x / sh.map_size.y;
+                if l.distance > 0.0 {
+                    cam.far = l.distance;
+                }
+                cam.update_perspective();
+            } else {
+                cam.update_orthographic();
+            }
+            let view = view_towards(&position, &target, &Vector3::new(0.0, 1.0, 0.0));
+            matrix.set(0.5, 0.0, 0.0, 0.5, 0.0, 0.5, 0.0, 0.5, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 1.0);
+            let mut pv = Matrix4::identity();
+            pv.multiply_matrices(&cam.projection_matrix, &view);
+            matrix.multiply(&pv);
+            views.push(view);
+        }
+        out.push(ShadowPlan {
+            light: light_index,
+            kind,
+            map_width: sh.map_size.x,
+            map_height: sh.map_size.y,
+            bias: sh.bias,
+            normal_bias: sh.normal_bias,
+            radius: sh.radius,
+            intensity: sh.intensity,
+            blur_samples: sh.blur_samples,
+            near: cam.near,
+            far: cam.far,
+            views,
+            projection: cam.projection_matrix,
+            matrix,
+        });
+    }
+    out
+}
+
 /// A material's shading inputs as `MATERIAL_STRIDE` floats:
 /// color.rgb, opacity | emissive.rgb, alpha_test |
 /// specular.rgb, shininess | diffuse_scale, lit, specular_on, mode |
 /// side (0 front, 1 back, 2 double), flat, vertex_colors, fog |
 /// roughness, metalness (as set; the shader applies the maps and clamps),
-/// physical (GGX), 0.
-/// mode: 0 plain, 1 toon, 2 normal, 3 depth, 4 matcap.
+/// physical (GGX), shadow side (-1 none, else as side).
+/// mode: 0 plain, 1 toon, 2 normal, 3 depth, 4 matcap, 5 shadow.
 pub fn material_uniforms(m: &Material) -> Vec<f64> {
     let s = surface_of(m);
     let mode = if m.kind == MaterialKind::MeshToon {
@@ -262,13 +420,17 @@ pub fn material_uniforms(m: &Material) -> Vec<f64> {
         3.0
     } else if m.kind == MaterialKind::MeshMatcap {
         4.0
+    } else if m.kind == MaterialKind::Shadow {
+        5.0
     } else {
         0.0
     };
-    let side = match m.side {
-        Side::Front => 0.0,
-        Side::Back => 1.0,
-        Side::Double => 2.0,
+    let side = side_value(m.side);
+    let shadow_side = match m.shadow_side {
+        Some(Side::Front) => 0.0,
+        Some(Side::Back) => 1.0,
+        Some(Side::Double) => 2.0,
+        None => -1.0,
     };
     vec![
         s.color.r,
@@ -294,7 +456,7 @@ pub fn material_uniforms(m: &Material) -> Vec<f64> {
         m.roughness,
         m.metalness,
         if s.physical { 1.0 } else { 0.0 },
-        0.0,
+        shadow_side,
     ]
 }
 
