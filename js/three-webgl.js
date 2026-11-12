@@ -62,7 +62,10 @@
     "uniform mat3 u_uvt;\n" +
     "uniform int u_instanced;\n" +
     "uniform float u_pointSize, u_pointScale;\n" +
-    "uniform int u_sizeAtt, u_sprite;\n" +
+    "uniform int u_sizeAtt;\n" +
+    "uniform int u_sprite;\n" +
+    "uniform mat3 u_normalMat;\n" +
+    "uniform mat4 u_viewInv;\n" +
     "uniform vec2 u_center;\n" +
     "uniform float u_rotation;\n" +
     "out vec3 v_world; out vec3 v_normal; out vec2 v_uv; out vec2 v_uv0; out vec3 v_color; out float v_depth; out float v_lineDist;\n" +
@@ -75,7 +78,10 @@
     "  v_lineDist = u_dashScale * a_lineDistance;\n" +
     "  vec4 w = m * vec4(pos, 1.0);\n" +
     "  v_world = w.xyz;\n" +
-    "  v_normal = mat3(transpose(inverse(m))) * a_normal;\n" +
+        // the normal matrix comes from the CPU; an instance's own matrix is applied with its scale divided out (three.js's defaultnormal_vertex)
+    "  vec3 nrm = a_normal;\n" +
+    "  if (u_instanced == 1) { mat3 im = mat3(a_im0.xyz, a_im1.xyz, a_im2.xyz); nrm /= vec3(dot(im[0], im[0]), dot(im[1], im[1]), dot(im[2], im[2])); nrm = im * nrm; }\n" +
+    "  v_normal = u_normalMat * nrm;\n" +
     "  v_uv = (u_uvt * vec3(a_uv, 1.0)).xy;\n" +
     "  v_color = a_color * a_icolor;\n" +
     "  vec4 vp = u_view * w;\n" +
@@ -89,7 +95,7 @@
     "    if (u_sizeAtt == 0 && u_proj[2][3] == -1.0) sc *= -mv.z;\n" +
     "    vec2 ap = (a_position.xy - (u_center - vec2(0.5))) * sc;\n" +
     "    mv.xy += vec2(cos(u_rotation) * ap.x - sin(u_rotation) * ap.y, sin(u_rotation) * ap.x + cos(u_rotation) * ap.y);\n" +
-    "    v_world = (inverse(u_view) * mv).xyz; v_normal = vec3(0.0, 0.0, 1.0); v_depth = -mv.z;\n" +
+    "    v_world = (u_viewInv * mv).xyz; v_normal = vec3(0.0, 0.0, 1.0); v_depth = -mv.z;\n" +
     "    gl_Position = u_proj * mv;\n" +
     "  }\n" +
     "  gl_PointSize = max(1.0, u_sizeAtt == 1 ? u_pointSize * u_pointScale / max(-vp.z, 1e-4) : u_pointSize);\n" +
@@ -539,7 +545,18 @@
     "u_alphaMap", "u_roughMap", "u_metalMap", "u_normalMap", "u_aoMap", "u_matcap", "u_gradMap", "u_maps", "u_linearOut", "u_premult", "u_t", "u_normalScale", "u_aoIntensity",
     "u_dispMap", "u_hasDisp", "u_dispT", "u_dispScale", "u_dispBias", "u_dashScale", "u_dashed", "u_dashSize", "u_dashTotal", "u_bumpScale", "u_bumpMap", "u_sheen",
     "u_trans", "u_attColor", "u_transMap", "u_transSize", "u_ltc", "u_envMap", "u_env", "u_envRot", "u_envUV",
-    "u_sh0", "u_sh1", "u_sh2", "u_shc0", "u_shMat", "u_shParam", "u_shSize", "u_receive"];
+    "u_sh0", "u_sh1", "u_sh2", "u_shc0", "u_shMat", "u_shParam", "u_shSize", "u_receive", "u_normalMat", "u_viewInv"];
+
+  // the inverse transpose of a 4x4 matrix's upper 3x3 (column-major), into out
+  function normalMatrix(e, out) {
+    var a = e[0], b = e[1], c = e[2], d = e[4], f = e[5], g = e[6], h = e[8], i = e[9], j = e[10];
+    var A = f * j - g * i, B = g * h - d * j, C = d * i - f * h;
+    var det = a * A + b * B + c * C, k = det === 0 ? 0 : 1 / det;
+    out[0] = A * k; out[1] = B * k; out[2] = C * k;
+    out[3] = (c * i - b * j) * k; out[4] = (a * j - c * h) * k; out[5] = (b * h - a * i) * k;
+    out[6] = (b * g - c * f) * k; out[7] = (c * d - a * g) * k; out[8] = (a * f - b * d) * k;
+    return out;
+  }
 
   function Backend(gl, renderer) {
     this.gl = gl;
@@ -556,6 +573,7 @@
     this.envs = new WeakMap();      // equirect texture -> prefiltered levels
     this.lightData = new Float32Array(MAX_LIGHTS * 28);
     this.mapTransforms = new Float32Array(54);
+    this.normalMat = new Float32Array(9);
     this.textureCount = 0;
     // the DFG table for Standard/Physical lighting (renderers/dfg_table.rs)
     this.dfg = gl.createTexture();
@@ -589,7 +607,8 @@
   // (SPEC uniforms and the K_ flags) become constants, so the shader holds
   // only the branches that draw takes. `key` lists the values in SPEC_KEYS
   // order after the shadow type (1 PCF, also without shadows; 2 basic; 3 VSM).
-  var SPEC = ["u_hasMap", "u_points", "u_hasNormal", "u_opaque", "u_tone", "u_maps", "u_linearOut", "u_premult", "u_hasEmap", "u_dashed", "u_receive"];
+  var SPEC = ["u_hasMap", "u_points", "u_hasNormal", "u_opaque", "u_tone", "u_maps", "u_linearOut", "u_premult", "u_hasEmap", "u_dashed", "u_receive",
+    "u_instanced", "u_hasDisp", "u_sprite"];
   var K_FLAGS = ["K_MODE", "K_LIT", "K_PHONG", "K_PHYS", "K_FLAT", "K_SHEEN", "K_TRANS", "K_RECT", "K_FOG", "K_SHPASS", "K_ENV",
     // lights per kind (ambient, hemisphere, directional, point, spot, rect area), packed in that order
     "K_NAMB", "K_NHEMI", "K_NDIR", "K_NPOINT", "K_NSPOT", "K_NRECT"];
@@ -610,11 +629,16 @@
     }
     return head + body.replace("//@LIGHTS\n", loops);
   }
+  function vertexSource(type, vals) {
+    var head = "#version 300 es\n";
+    for (var i = 0; i < SPEC.length; i++) head += "#define " + SPEC[i] + " " + vals[i] + "\n";
+    return VS.replace("#version 300 es\n", head).replace(/^uniform int (u_\w+);\n/gm, function (line, name) { return SPEC.indexOf(name) >= 0 ? "" : line; });
+  }
   B.useMain = function (type, vals) {
     if (!vals) { vals = []; for (var i = 0; i < SPEC_KEYS.length; i++) vals.push(0); }
     var key = type + ":" + vals.join(","), m = this.mains[key], gl = this.gl;
     if (!m) {
-      m = this.mains[key] = program(gl, VS, fragmentSource(type, vals), NAMES);
+      m = this.mains[key] = program(gl, vertexSource(type, vals), fragmentSource(type, vals), NAMES);
       m.seen = 0;
       this.programCount = (this.programCount || 0) + 1;
       gl.useProgram(m.prog);
@@ -656,9 +680,12 @@
     var gl = this.gl, e = this.buffers.get(attr);
     if (e && e.version === attr.version && e.length === attr.array.length) return e.buf;
     if (!e) { e = { buf: gl.createBuffer(), version: -1, length: 0 }; this.buffers.set(attr, e); }
-    var data = target === gl.ELEMENT_ARRAY_BUFFER ? Uint32Array.from(attr.array) : Float32Array.from(attr.array);
+    // typed arrays of the right kind go as they are; a same-sized update rewrites the buffer in place
+    var arr = attr.array, index = target === gl.ELEMENT_ARRAY_BUFFER;
+    var data = index ? (arr instanceof Uint32Array ? arr : Uint32Array.from(arr)) : (arr instanceof Float32Array ? arr : Float32Array.from(arr));
     gl.bindBuffer(target, e.buf);
-    gl.bufferData(target, data, attr.usage === 35048 ? gl.DYNAMIC_DRAW : gl.STATIC_DRAW);
+    if (e.length === arr.length) gl.bufferSubData(target, 0, data);
+    else gl.bufferData(target, data, attr.usage === 35048 ? gl.DYNAMIC_DRAW : gl.STATIC_DRAW);
     e.version = attr.version; e.length = attr.array.length;
     return e.buf;
   };
@@ -1266,6 +1293,7 @@
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
     this.frameUniform("u_view", "m4", plan.view.elements);
+    this.frameUniform("u_viewInv", "m4", (this._viewInv || (this._viewInv = new T.Matrix4())).fromArray(plan.view.elements).invert().elements);
     this.frameUniform("u_proj", "m4", plan.projection.elements);
     this.frameUniform("u_cam", "v3", [plan.camera_position.x, plan.camera_position.y, plan.camera_position.z]);
     var n = Math.min(MAX_LIGHTS, plan.light_count);
@@ -1481,15 +1509,16 @@
     var receive = o.receiveShadow && this.hasShadows ? 1 : 0;
     // the program variant, in SPEC_KEYS order; a shadow caster keeps only what decides its discards
     var sp = this.shadowPass ? 1 : 0;
-    this.useMain(this.stype, sp ? [glTex ? 1 : 0, pointsUv, 0, opaque ? 1 : 0, 0, bits & 1, 0, 0, 0, dashed ? 1 : 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0] : [
+    this.useMain(this.stype, sp ? [glTex ? 1 : 0, pointsUv, 0, opaque ? 1 : 0, 0, bits & 1, 0, 0, 0, dashed ? 1 : 0, 0, instances > 0 ? 1 : 0, glD ? 1 : 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0] : [
       glTex ? 1 : 0, pointsUv, hasNormal ? 1 : 0, opaque ? 1 : 0, material.toneMapped === false ? 0 : this.tone, bits, this.outLinear,
-      material.premultipliedAlpha ? 1 : 0, glE ? 1 : 0, dashed ? 1 : 0, receive,
+      material.premultipliedAlpha ? 1 : 0, glE ? 1 : 0, dashed ? 1 : 0, receive, instances > 0 ? 1 : 0, glD ? 1 : 0, sprite ? 1 : 0,
       mu[15] | 0, mu[13] > 0.5 ? 1 : 0, mu[14] > 0.5 ? 1 : 0, physical, mu[17] > 0.5 ? 1 : 0,
       physical && sheen > 0 && shc ? 1 : 0, physical && tr > 0 ? 1 : 0, this.hasRect, mu[19] > 0.5 ? this.fogKind : 0, 0, env ? env.mode : 0].concat(mu[13] > 0.5 ? this.lightCounts : [0, 0, 0, 0, 0, 0]));
     var u = this.u;
     gl.uniform4fv(u.u_mat, mu);
     this.envUniforms(env);
     gl.uniformMatrix4fv(u.u_model, false, o.matrixWorld.elements);
+    gl.uniformMatrix3fv(u.u_normalMat, false, normalMatrix(o.matrixWorld.elements, this.normalMat));
     gl.uniformMatrix3fv(u.u_uvt, false, R.RenderersPlan.map_transform(material));
     if (dashed) {
       gl.uniform1f(u.u_dashScale, material.scale == null ? 1 : material.scale);
