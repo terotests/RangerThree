@@ -5,6 +5,9 @@
 use ranger::prelude::*;
 
 pub const DEG2RAD: f64 = std::f64::consts::PI / 180.0;
+/// Positive infinity, spelled so that every Ranger target reads it.
+pub const INFINITY: f64 = 1.0 / 0.0;
+
 pub const RAD2DEG: f64 = 180.0 / std::f64::consts::PI;
 
 pub fn clamp(value: f64, min: f64, max: f64) -> f64 {

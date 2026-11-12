@@ -349,6 +349,13 @@ impl Matrix4 {
                     + n12 * n23 * n31)
     }
 
+    /// The determinant of the upper 3x3 (an affine matrix's determinant).
+    pub fn determinant_affine(&self) -> f64 {
+        let te = self.elements.clone();
+        te[0] * (te[5] * te[10] - te[9] * te[6]) - te[4] * (te[1] * te[10] - te[9] * te[2])
+            + te[8] * (te[1] * te[6] - te[5] * te[2])
+    }
+
     pub fn transpose(&mut self) -> &mut Matrix4 {
         let m = self.elements.clone();
         for row in 0..4 {
