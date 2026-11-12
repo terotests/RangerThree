@@ -345,6 +345,43 @@ var THREE = (function (R) {
   T.SRGBColorSpace = "srgb";
   T.LinearSRGBColorSpace = "srgb-linear";
   T.NoColorSpace = "";
+  T.SRGBTransfer = "srgb";
+  T.LinearTransfer = "linear";
+  T.Rec709Primaries = "rec709";
+  // THREE.ColorManagement: Linear-sRGB is the working space, sRGB the
+  // display space (the crate converts on input and output)
+  (function () {
+    function toLin(c) { return R.MathsColor.srgb_to_linear(c); }
+    function toSrgb(c) { return R.MathsColor.linear_to_srgb(c); }
+    var spaces = {
+      "srgb-linear": { transfer: "linear", primaries: "rec709", luminanceCoefficients: [0.2126, 0.7152, 0.0722], outputColorSpaceConfig: { drawingBufferColorSpace: "srgb" } },
+      "srgb": { transfer: "srgb", primaries: "rec709", luminanceCoefficients: [0.2126, 0.7152, 0.0722], outputColorSpaceConfig: { drawingBufferColorSpace: "srgb" } }
+    };
+    var CM = {
+      enabled: true,
+      workingColorSpace: "srgb-linear",
+      spaces: spaces,
+      convert: function (color, source, target) {
+        if (this.enabled === false || source === target || !source || !target) return color;
+        if (source === "srgb" && target === "srgb-linear") { color.r = toLin(color.r); color.g = toLin(color.g); color.b = toLin(color.b); }
+        else if (source === "srgb-linear" && target === "srgb") { color.r = toSrgb(color.r); color.g = toSrgb(color.g); color.b = toSrgb(color.b); }
+        return color;
+      },
+      workingToColorSpace: function (color, target) { return this.convert(color, this.workingColorSpace, target); },
+      colorSpaceToWorking: function (color, source) { return this.convert(color, source, this.workingColorSpace); },
+      fromWorkingColorSpace: function (color, target) { return this.convert(color, this.workingColorSpace, target); },
+      toWorkingColorSpace: function (color, source) { return this.convert(color, source, this.workingColorSpace); },
+      getPrimaries: function (cs) { return cs === "" ? "" : (spaces[cs] || spaces["srgb-linear"]).primaries; },
+      getTransfer: function (cs) { return cs === "" ? "linear" : (spaces[cs] || spaces["srgb-linear"]).transfer; },
+      getToneMappingMode: function () { return "standard"; },
+      getLuminanceCoefficients: function (target, cs) { var k = (spaces[cs || this.workingColorSpace] || spaces["srgb-linear"]).luminanceCoefficients; return target.fromArray(k); },
+      define: function (defs) { for (var k in defs) spaces[k] = defs[k]; },
+      _getMatrix: function (target) { return target.identity(); },
+      _getDrawingBufferColorSpace: function () { return "srgb"; },
+      _getUnpackColorSpace: function () { return this.workingColorSpace; }
+    };
+    T.ColorManagement = CM;
+  })();
   function space(cs, dflt) {
     if (cs === undefined) return dflt;
     return cs === T.SRGBColorSpace ? SRGB : LINEAR;

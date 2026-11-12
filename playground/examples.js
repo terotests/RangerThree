@@ -574,3 +574,73 @@ renderer.setAnimationLoop((t) => {
   renderer.render(scene, camera);
 });`
 });
+
+Object.assign(EXAMPLES, {
+  "Sprites, depth and glow maps": `
+// Sprites always face the camera; MeshDepthMaterial shows depth; an
+// emissiveMap makes parts of a surface glow; ACES tone mapping as in
+// React Three Fiber's Canvas.
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101418);
+const camera = new THREE.PerspectiveCamera(50, 4 / 3, 0.5, 30);
+camera.position.set(0, 2, 9);
+orbit(camera, new THREE.Vector3(0, 0.5, 0));
+
+function canvasTexture(size, draw) {
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  draw(c.getContext("2d"), size);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+// a soft round dot for the sprites
+const dot = canvasTexture(64, (g, s) => {
+  const grad = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.4, "rgba(255,220,150,0.8)");
+  grad.addColorStop(1, "rgba(255,160,60,0)");
+  g.fillStyle = grad; g.fillRect(0, 0, s, s);
+});
+const sprites = [];
+for (let i = 0; i < 24; i++) {
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: dot, color: new THREE.Color().setHSL(i / 24, 0.8, 0.6) }));
+  sp.scale.setScalar(0.6);
+  scene.add(sp);
+  sprites.push(sp);
+}
+
+// windows that glow: an emissiveMap on a dark box
+const windows = canvasTexture(128, (g, s) => {
+  g.fillStyle = "#000"; g.fillRect(0, 0, s, s);
+  for (let y = 0; y < 6; y++) for (let x = 0; x < 4; x++) {
+    if ((x * 7 + y * 3) % 5 === 0) continue;
+    g.fillStyle = "#ffd27a"; g.fillRect(10 + x * 29, 8 + y * 20, 18, 12);
+  }
+});
+const tower = new THREE.Mesh(new THREE.BoxGeometry(1.4, 3, 1.4), new THREE.MeshStandardMaterial({ color: 0x2a2f3a, roughness: 0.7, emissive: 0xffffff, emissiveMap: windows }));
+tower.position.set(-2, 1.5, 0);
+
+// depth: near is white, far is black
+const knot = new THREE.Mesh(new THREE.TorusKnotGeometry(0.8, 0.28, 128, 16), new THREE.MeshDepthMaterial());
+knot.position.set(2, 1.2, 0);
+
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), new THREE.MeshStandardMaterial({ color: 0x3a4a3a }));
+ground.rotation.x = -Math.PI / 2;
+scene.add(tower, knot, ground);
+scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x202020, 1.5));
+const moon = new THREE.DirectionalLight(0xffffff, 2);
+moon.position.set(-3, 6, 4);
+scene.add(moon);
+
+renderer.setAnimationLoop((t) => {
+  sprites.forEach((sp, i) => {
+    const a = t / 2500 + i / 24 * Math.PI * 2;
+    sp.position.set(Math.cos(a) * 3.2, 1 + Math.sin(a * 3) * 0.6, Math.sin(a) * 3.2);
+  });
+  knot.rotation.y = t / 1800;
+  renderer.render(scene, camera);
+});`
+});

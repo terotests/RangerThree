@@ -26,7 +26,7 @@ pub const MATERIAL_STRIDE: i64 = 20;
 #[derive(Clone)]
 pub struct DrawItem {
     pub object: ObjectRef,
-    /// 1 mesh, 2 instanced mesh, 3 line, 4 line segments, 5 line loop, 6 points
+    /// 1 mesh, 2 instanced mesh, 3 line, 4 line segments, 5 line loop, 6 points, 7 sprite
     pub kind: i64,
     pub transparent: bool,
     /// view-space z of the object's origin (for sorting)
@@ -58,6 +58,7 @@ fn draw_kind(o: &ObjectRef) -> i64 {
         ObjectKind::LineSegments(_) => 4,
         ObjectKind::LineLoop(_) => 5,
         ObjectKind::Points(_) => 6,
+        ObjectKind::Sprite(_) => 7,
         _ => 0,
     }
 }
@@ -90,10 +91,13 @@ pub fn plan_frame(scene: &ObjectRef, camera: &ObjectRef, clear_color: &Color, cl
         update_matrix_world(camera, false);
     }
     let mut clear = *clear_color;
+    let mut clear_alpha = clear_alpha;
     let mut fog: Vec<f64> = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
     if let ObjectKind::Scene(s) = &scene.borrow().kind {
         if let Background::Color(c) = &s.background {
+            // three.js draws a colour background opaque
             clear = *c;
+            clear_alpha = 1.0;
         }
         if let Some(f) = &s.fog {
             let kind = if f.kind == FogKind::Linear { 1.0 } else { 2.0 };
@@ -148,6 +152,11 @@ pub fn plan_frame(scene: &ObjectRef, camera: &ObjectRef, clear_color: &Color, cl
                 is_transparent = m.transparent;
             }
         }
+        if let ObjectKind::Sprite(sd) = &o.borrow().kind {
+            let m = sd.material.borrow();
+            has_material = m.visible;
+            is_transparent = m.transparent;
+        }
         if !has_material {
             continue;
         }
@@ -189,13 +198,15 @@ pub fn plan_frame(scene: &ObjectRef, camera: &ObjectRef, clear_color: &Color, cl
 /// color.rgb, opacity | emissive.rgb, alpha_test |
 /// specular.rgb, shininess | diffuse_scale, lit, specular_on, mode |
 /// side (0 front, 1 back, 2 double), flat, vertex_colors, fog.
-/// mode: 0 plain, 1 toon, 2 normal.
+/// mode: 0 plain, 1 toon, 2 normal, 3 depth.
 pub fn material_uniforms(m: &Material) -> Vec<f64> {
     let s = surface_of(m);
     let mode = if m.kind == MaterialKind::MeshToon {
         1.0
     } else if m.kind == MaterialKind::MeshNormal {
         2.0
+    } else if m.kind == MaterialKind::MeshDepth {
+        3.0
     } else {
         0.0
     };

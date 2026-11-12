@@ -120,6 +120,8 @@
       return;
     }
     this._uploadTextures(scene);
+    this._soft.tone_mapping = this.toneMapping | 0;
+    this._soft.tone_mapping_exposure = this.toneMappingExposure === undefined ? 1 : this.toneMappingExposure;
     this._soft.render(scene, camera);
     this.info.render.frame++;
     this.info.render.calls = 1;

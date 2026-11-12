@@ -125,6 +125,98 @@ pub struct SoftRenderer {
     pub points: i64,
     /// Uploaded texture pixels by texture id.
     pub textures: Vec<TexImage>,
+    /// three.js's `toneMapping` constant and `toneMappingExposure`.
+    pub tone_mapping: i64,
+    pub tone_mapping_exposure: f64,
+    /// the tone mapping of the material being drawn
+    cur_tone: i64,
+}
+
+/// `m` (column-major 3x3, as GLSL's mat3 of column vectors) times `c`.
+fn mul_cols(m: &[f64; 9], c: &Color) -> Color {
+    Color::new(
+        m[0] * c.r + m[3] * c.g + m[6] * c.b,
+        m[1] * c.r + m[4] * c.g + m[7] * c.b,
+        m[2] * c.r + m[5] * c.g + m[8] * c.b,
+    )
+}
+
+fn clamp_color(c: &Color) -> Color {
+    Color::new(c.r.max(0.0).min(1.0), c.g.max(0.0).min(1.0), c.b.max(0.0).min(1.0))
+}
+
+fn rrt_odt(v: f64) -> f64 {
+    let a = v * (v + 0.0245786) - 0.000090537;
+    let b = v * (0.983729 * v + 0.4329510) + 0.238081;
+    a / b
+}
+
+fn cineon(x: f64) -> f64 {
+    ((x * (6.2 * x + 0.5)) / (x * (6.2 * x + 1.7) + 0.06)).powf(2.2)
+}
+
+fn agx_encode(x: f64) -> f64 {
+    // 1e-10 keeps log2 finite (written as a division: Ranger's macro text
+    // prints tiny literals in exponent form, which it cannot read back)
+    let floor = 1.0 / 10000000000.0;
+    agx_contrast(((x.max(floor).log2() + 12.47393) / (4.026069 + 12.47393)).max(0.0).min(1.0))
+}
+
+fn agx_contrast(x: f64) -> f64 {
+    let x2 = x * x;
+    let x4 = x2 * x2;
+    15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232
+}
+
+/// three.js's tone mapping operators: 1 linear, 2 Reinhard, 3 Cineon,
+/// 4 ACES filmic, 6 AgX, 7 neutral (others leave the colour).
+pub fn tone_map(c_in: &Color, mode: i64, exposure: f64) -> Color {
+    let c = Color::new(c_in.r * exposure, c_in.g * exposure, c_in.b * exposure);
+    if mode == 1 {
+        return clamp_color(&c);
+    }
+    if mode == 2 {
+        return clamp_color(&Color::new(c.r / (1.0 + c.r), c.g / (1.0 + c.g), c.b / (1.0 + c.b)));
+    }
+    if mode == 3 {
+        let r = (c.r - 0.004).max(0.0);
+        let g = (c.g - 0.004).max(0.0);
+        let b = (c.b - 0.004).max(0.0);
+        return Color::new(cineon(r), cineon(g), cineon(b));
+    }
+    if mode == 4 {
+        let input: [f64; 9] = [0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777];
+        let output: [f64; 9] = [1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602];
+        let s = Color::new(c.r / 0.6, c.g / 0.6, c.b / 0.6);
+        let a = mul_cols(&input, &s);
+        let t = Color::new(rrt_odt(a.r), rrt_odt(a.g), rrt_odt(a.b));
+        return clamp_color(&mul_cols(&output, &t));
+    }
+    if mode == 6 {
+        let to2020: [f64; 9] = [0.6274, 0.0691, 0.0164, 0.3293, 0.9195, 0.0880, 0.0433, 0.0113, 0.8956];
+        let from2020: [f64; 9] = [1.6605, -0.1246, -0.0182, -0.5876, 1.1329, -0.1006, -0.0728, -0.0083, 1.1187];
+        let inset: [f64; 9] = [0.856627153315983, 0.137318972929847, 0.11189821299995, 0.0951212405381588, 0.761241990602591, 0.0767994186031903, 0.0482516061458583, 0.101439036467562, 0.811302368396859];
+        let outset: [f64; 9] = [1.1271005818144368, -0.1413297634984383, -0.14132976349843826, -0.11060664309660323, 1.157823702216272, -0.11060664309660294, -0.016493938717834573, -0.016493938717834257, 1.2519364065950405];
+        let a = mul_cols(&inset, &mul_cols(&to2020, &c));
+        let o = mul_cols(&outset, &Color::new(agx_encode(a.r), agx_encode(a.g), agx_encode(a.b)));
+        let lin = Color::new(o.r.max(0.0).powf(2.2), o.g.max(0.0).powf(2.2), o.b.max(0.0).powf(2.2));
+        return clamp_color(&mul_cols(&from2020, &lin));
+    }
+    if mode == 7 {
+        let x = c.r.min(c.g).min(c.b);
+        let off = if x < 0.08 { x - 6.25 * x * x } else { 0.04 };
+        let d0 = Color::new(c.r - off, c.g - off, c.b - off);
+        let peak = d0.r.max(d0.g).max(d0.b);
+        if peak < 0.76 {
+            return d0;
+        }
+        let d = 0.24;
+        let np = 1.0 - d * d / (peak + d - 0.76);
+        let k = np / peak;
+        let g = 1.0 - 1.0 / (0.15 * (peak - np) + 1.0);
+        return Color::new(d0.r * k + (np - d0.r * k) * g, d0.g * k + (np - d0.g * k) * g, d0.b * k + (np - d0.b * k) * g);
+    }
+    *c_in
 }
 
 fn to_byte(c: f64) -> f64 {
@@ -380,6 +472,9 @@ impl SoftRenderer {
             lines: 0,
             points: 0,
             textures: Vec::new(),
+            tone_mapping: 0,
+            tone_mapping_exposure: 1.0,
+            cur_tone: 0,
         };
         r.set_size(width, height);
         r
@@ -514,14 +609,16 @@ impl SoftRenderer {
             update_matrix_world(camera, false);
         }
         let mut clear = self.clear_color;
+        let mut alpha = self.clear_alpha;
         let mut fog: Option<Fog> = None;
         if let ObjectKind::Scene(s) = &scene.borrow().kind {
             if let Background::Color(c) = &s.background {
+                // three.js draws a colour background opaque
                 clear = *c;
+                alpha = 1.0;
             }
             fog = s.fog.clone();
         }
-        let alpha = self.clear_alpha;
         self.clear(&clear, alpha);
         self.triangles = 0;
         self.lines = 0;
@@ -629,6 +726,7 @@ impl SoftRenderer {
         if !material.visible {
             return;
         }
+        self.cur_tone = if material.tone_mapped && material.kind != MaterialKind::MeshNormal && material.kind != MaterialKind::MeshDepth { self.tone_mapping } else { 0 };
         let geometry = data.geometry.borrow();
         let world = ob.matrix_world;
         if kind == 1 {
@@ -655,6 +753,13 @@ impl SoftRenderer {
         } else {
             self.draw_lines(&geometry, &material, &world, kind, frame);
         }
+    }
+
+    fn tone(&self, c: &Color) -> Color {
+        if self.cur_tone == 0 {
+            return *c;
+        }
+        tone_map(c, self.cur_tone, self.tone_mapping_exposure)
     }
 
     fn fogged(&self, c: &Color, view_z: f64, frame: &Frame, uses_fog: bool) -> Color {
@@ -794,6 +899,12 @@ impl SoftRenderer {
                         vx.v = ub.get_y(ids[k]);
                     }
                     verts.push(vx);
+                } else if material.kind == MaterialKind::MeshDepth {
+                    // BasicDepthPacking: 1 - window depth, written without a
+                    // colour space (undo the output's sRGB encoding)
+                    let ndc = self.to_screen(&v, frame).z;
+                    let d = srgb_to_linear((1.0 - (ndc * 0.5 + 0.5)).max(0.0).min(1.0));
+                    verts.push(vert(v, Color::new(d, d, d)));
                 } else {
                     let sum = Color::new(lit.diffuse.r + lit.add.r, lit.diffuse.g + lit.add.g, lit.diffuse.b + lit.add.b);
                     verts.push(vert(v, self.fogged(&sum, v.z, frame, material.fog)));
@@ -922,9 +1033,10 @@ impl SoftRenderer {
         }
         self.depth[at] = z;
         let p = at * 4;
-        self.pixels[p] = to_byte(c.r);
-        self.pixels[p + 1] = to_byte(c.g);
-        self.pixels[p + 2] = to_byte(c.b);
+        let o = self.tone(c);
+        self.pixels[p] = to_byte(o.r);
+        self.pixels[p + 1] = to_byte(o.g);
+        self.pixels[p + 2] = to_byte(o.b);
         self.pixels[p + 3] = 255.0;
     }
 
@@ -982,9 +1094,10 @@ impl SoftRenderer {
                     let at = (y * self.width + x) as usize;
                     if z >= -1.0 && z <= 1.0 && z < self.depth[at] {
                         let p = at * 4;
-                        let r = to_byte(w0 * ca.r + w1 * cb.r + w2 * cc.r);
-                        let g = to_byte(w0 * ca.g + w1 * cb.g + w2 * cc.g);
-                        let bl = to_byte(w0 * ca.b + w1 * cb.b + w2 * cc.b);
+                        let o = self.tone(&Color::new(w0 * ca.r + w1 * cb.r + w2 * cc.r, w0 * ca.g + w1 * cb.g + w2 * cc.g, w0 * ca.b + w1 * cb.b + w2 * cc.b));
+                        let r = to_byte(o.r);
+                        let g = to_byte(o.g);
+                        let bl = to_byte(o.b);
                         if blend {
                             self.pixels[p] = r * opacity + self.pixels[p] * (1.0 - opacity);
                             self.pixels[p + 1] = g * opacity + self.pixels[p + 1] * (1.0 - opacity);
@@ -1123,6 +1236,10 @@ impl SoftRenderer {
                             g += (s.fog_color.g - g) * fog;
                             bl += (s.fog_color.b - bl) * fog;
                         }
+                        let o = self.tone(&Color::new(r, g, bl));
+                        r = o.r;
+                        g = o.g;
+                        bl = o.b;
                         let p = at * 4;
                         if blend {
                             self.pixels[p] = to_byte(r) * alpha + self.pixels[p] * (1.0 - alpha);

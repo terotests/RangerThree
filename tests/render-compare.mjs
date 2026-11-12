@@ -5,7 +5,10 @@
 // three.js. Math.random is seeded; examples that also draw random numbers
 // inside three.js (uuids) differ for that reason alone.
 //
-//   bash scripts/build-playground.sh && node tests/render-compare.mjs [--grep=re] [--t=ms]
+//   bash scripts/build-playground.sh && node tests/render-compare.mjs [--grep=re] [--t=ms] [--tone=n] [--alpha]
+//
+// --tone sets renderer.toneMapping (4 = ACES filmic, as React Three Fiber's
+// Canvas does); --alpha makes an alpha canvas and compares alpha too.
 import { createServer } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -16,6 +19,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const arg = (k, d) => (process.argv.find((a) => a.startsWith(`--${k}=`)) || "").split("=")[1] || d;
 const grep = new RegExp(arg("grep", "."));
 const t = arg("t", "1000");
+const extra = (arg("tone", "") ? `&tone=${arg("tone", "")}` : "") + (process.argv.includes("--alpha") ? "&alpha=1" : "");
+const channels = process.argv.includes("--alpha") ? 4 : 3;
 const files = {
   "/page.html": join(ROOT, "tests/render-compare.html"),
   "/three.cjs": join(ROOT, "tmp/three-ref/three/build/three.cjs"),
@@ -34,7 +39,7 @@ const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
 
 async function shot(query, name) {
-  await page.goto(`${base}/page.html?${query}&t=${t}&ex=${encodeURIComponent(name)}`);
+  await page.goto(`${base}/page.html?${query}${extra}&t=${t}&ex=${encodeURIComponent(name)}`);
   await page.waitForFunction(() => window.__done, null, { timeout: 30000 });
   await page.waitForTimeout(200);
   const err = await page.evaluate(() => window.__err);
@@ -49,7 +54,7 @@ async function shot(query, name) {
 }
 function diff(a, b) {
   let s = 0, n = 0;
-  for (let i = 0; i < a.length; i += 4) { s += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]); n += 3; }
+  for (let i = 0; i < a.length; i += 4) for (let c = 0; c < channels; c++) { s += Math.abs(a[i + c] - b[i + c]); n++; }
   return s / n;
 }
 
