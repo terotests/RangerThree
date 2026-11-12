@@ -41,12 +41,39 @@ for (const it of SCENE_ITEMS) {
   }, { it, W, H });
   if (r.err) { rows.push([it.id, -1, r.err]); continue; }
   if (arg("png", "")) { const d = arg("png", ""); fs.mkdirSync(d, { recursive: true }); for (const k of ["ref", "rt"]) fs.writeFileSync(path.join(d, it.id.replace(/[^a-z0-9.]/gi, "_") + "." + k + ".png"), png(r[k], W, H)); }
-  let s = 0; for (let i = 0; i < r.ref.length; i++) s += Math.abs(r.ref[i] - r.rt[i]);
-  rows.push([it.id, s / r.ref.length]);
+  const c = compare(r.ref, r.rt, W, H);
+  rows.push([it.id, c.mean, c.ok ? "" : "FAIL far " + c.far]);
 }
 rows.sort((a, b) => b[1] - a[1]);
 for (const r of rows) console.log(r[1].toFixed ? r[1].toFixed(1) : r[1], r[0], r[2] || "");
+const measured = rows.filter((r) => r[1] >= 0);
+console.log(`match ${measured.filter((r) => !r[2]).length}/${measured.length}`);
 await browser.close();
+
+// the M-Files meter's rule (web/three/parity/run.mjs): over the pixels that
+// differ from the reference's corner, mean channel difference <= 6 and at
+// most 3 % off by more than 40, edges of the reference not counted
+function compare(a, b, w, h) {
+  const diff = (p, q, i, j) => Math.max(Math.abs(p[i] - q[j]), Math.abs(p[i + 1] - q[j + 1]), Math.abs(p[i + 2] - q[j + 2]), Math.abs(p[i + 3] - q[j + 3]));
+  let sum = 0, far = 0, n = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4;
+    if (diff(a, b, i, 0) <= 8 && diff(b, b, i, 0) <= 8) continue;
+    n++;
+    for (let c = 0; c < 4; c++) sum += Math.abs(a[i + c] - b[i + c]);
+    if (diff(a, b, i, i) <= 40) continue;
+    let edge = false;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const xx = x + dx, yy = y + dy;
+      if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+      if (diff(b, b, i, (yy * w + xx) * 4) > 40) { edge = true; break; }
+    }
+    if (!edge) far++;
+  }
+  if (!n) return { ok: true, mean: 0, far: 0 };
+  const mean = sum / (n * 4), share = far / n;
+  return { ok: mean <= 6 && share <= 0.03, mean, far: +share.toFixed(3) };
+}
 
 function png(px, w, h) {
   const raw = Buffer.alloc((w * 4 + 1) * h);

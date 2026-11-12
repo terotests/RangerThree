@@ -31,6 +31,9 @@ pub struct DrawItem {
     pub transparent: bool,
     /// view-space z of the object's origin (for sorting)
     pub depth: f64,
+    /// the object's renderOrder, and that of the nearest group above it
+    pub render_order: f64,
+    pub group_order: f64,
 }
 
 #[derive(Clone)]
@@ -61,6 +64,37 @@ fn draw_kind(o: &ObjectRef) -> i64 {
         ObjectKind::Sprite(_) => 7,
         _ => 0,
     }
+}
+
+/// three.js sorts by the renderOrder of the nearest enclosing Group first
+fn group_order(o: &ObjectRef) -> f64 {
+    let mut at = Some(o.clone());
+    while let Some(p) = at {
+        let is_group = match &p.borrow().kind {
+            ObjectKind::Group => true,
+            _ => false,
+        };
+        if is_group {
+            return p.borrow().render_order;
+        }
+        at = match &p.borrow().parent {
+            Some(w) => w.upgrade(),
+            None => None,
+        };
+    }
+    0.0
+}
+
+/// whether `a` is drawn after `b`: opaque by group order then render order
+/// (otherwise in scene order), transparent also farthest first
+fn after(a: &DrawItem, b: &DrawItem, transparent: bool) -> bool {
+    if a.group_order != b.group_order {
+        return a.group_order > b.group_order;
+    }
+    if a.render_order != b.render_order {
+        return a.render_order > b.render_order;
+    }
+    transparent && a.depth > b.depth
 }
 
 fn visible_chain(o: &ObjectRef) -> bool {
@@ -162,17 +196,25 @@ pub fn plan_frame(scene: &ObjectRef, camera: &ObjectRef, clear_color: &Color, cl
         }
         let mut p = o.borrow().world_position();
         p.apply_matrix4(&view);
-        let item = DrawItem { object: o.clone(), kind, transparent: is_transparent, depth: p.z };
+        let render_order = o.borrow().render_order;
+        let item = DrawItem { object: o.clone(), kind, transparent: is_transparent, depth: p.z, render_order, group_order: group_order(o) };
         if is_transparent {
             transparent.push(item);
         } else {
             opaque.push(item);
         }
     }
-    // transparent: farthest (most negative z) first
+    // stable insertion sorts; transparent: farthest (most negative z) first
+    for i in 1..opaque.len() {
+        let mut j = i;
+        while j > 0 && after(&opaque[j - 1], &opaque[j], false) {
+            opaque.swap(j - 1, j);
+            j -= 1;
+        }
+    }
     for i in 1..transparent.len() {
         let mut j = i;
-        while j > 0 && transparent[j - 1].depth > transparent[j].depth {
+        while j > 0 && after(&transparent[j - 1], &transparent[j], true) {
             transparent.swap(j - 1, j);
             j -= 1;
         }

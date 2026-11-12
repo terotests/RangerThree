@@ -10,75 +10,10 @@
 (function (T, R) {
   "use strict";
   var MAX_LIGHTS = 16;
-  var VS = "#version 300 es\n" +
-    "layout(location=0) in vec3 a_position;\n" +
-    "layout(location=1) in vec3 a_normal;\n" +
-    "layout(location=2) in vec2 a_uv;\n" +
-    "layout(location=3) in vec3 a_color;\n" +
-    "layout(location=4) in vec4 a_im0;\n" +
-    "layout(location=5) in vec4 a_im1;\n" +
-    "layout(location=6) in vec4 a_im2;\n" +
-    "layout(location=7) in vec4 a_im3;\n" +
-    "layout(location=8) in vec3 a_icolor;\n" +
-    "uniform mat4 u_model, u_view, u_proj;\n" +
-    "uniform mat3 u_uvt;\n" +
-    "uniform int u_instanced;\n" +
-    "uniform float u_pointSize, u_pointScale;\n" +
-    "uniform int u_sizeAtt, u_sprite;\n" +
-    "uniform vec2 u_center;\n" +
-    "uniform float u_rotation;\n" +
-    "out vec3 v_world; out vec3 v_normal; out vec2 v_uv; out vec2 v_uv0; out vec3 v_color; out float v_depth;\n" +
-    "void main() {\n" +
-    "  mat4 m = u_model;\n" +
-    "  if (u_instanced == 1) m = u_model * mat4(a_im0, a_im1, a_im2, a_im3);\n" +
-    "  vec4 w = m * vec4(a_position, 1.0);\n" +
-    "  v_world = w.xyz;\n" +
-    "  v_normal = mat3(transpose(inverse(m))) * a_normal;\n" +
-    "  v_uv = (u_uvt * vec3(a_uv, 1.0)).xy;\n" +
-    "  v_color = a_color * a_icolor;\n" +
-    "  vec4 vp = u_view * w;\n" +
-    "  v_depth = -vp.z;\n" +
-    "  gl_Position = u_proj * vp;\n" +
-    "  v_uv0 = a_uv;\n" +
-    // a sprite: a camera-facing quad scaled by the model's scale (three.js's sprite_vert)
-    "  if (u_sprite == 1) {\n" +
-    "    vec4 mv = u_view * u_model * vec4(0.0, 0.0, 0.0, 1.0);\n" +
-    "    vec2 sc = vec2(length(u_model[0].xyz), length(u_model[1].xyz));\n" +
-    "    if (u_sizeAtt == 0 && u_proj[2][3] == -1.0) sc *= -mv.z;\n" +
-    "    vec2 ap = (a_position.xy - (u_center - vec2(0.5))) * sc;\n" +
-    "    mv.xy += vec2(cos(u_rotation) * ap.x - sin(u_rotation) * ap.y, sin(u_rotation) * ap.x + cos(u_rotation) * ap.y);\n" +
-    "    v_world = (inverse(u_view) * mv).xyz; v_normal = vec3(0.0, 0.0, 1.0); v_depth = -mv.z;\n" +
-    "    gl_Position = u_proj * mv;\n" +
-    "  }\n" +
-    "  gl_PointSize = max(1.0, u_sizeAtt == 1 ? u_pointSize * u_pointScale / max(-vp.z, 1e-4) : u_pointSize);\n" +
-    "}\n";
-  var FS = "#version 300 es\n" +
-    "precision highp float;\n" +
-    "in vec3 v_world; in vec3 v_normal; in vec2 v_uv; in vec2 v_uv0; in vec3 v_color; in float v_depth;\n" +
-    "uniform sampler2D u_emap;\n" +
-    "uniform int u_hasEmap;\n" +
-    // extra maps: bit 1 alpha, 2 roughness, 4 metalness, 8 normal, 16 ao, 32 matcap, 64 gradient; u_t: their uv transforms
-    "uniform sampler2D u_alphaMap, u_roughMap, u_metalMap, u_normalMap, u_aoMap, u_matcap, u_gradMap;\n" +
-    "uniform int u_maps, u_linearOut, u_premult;\n" +
-    "uniform mat3 u_t[5];\n" +
-    "uniform vec2 u_normalScale;\n" +
-    "uniform float u_aoIntensity;\n" +
-    "uniform mat3 u_euvt;\n" +
-    "uniform vec4 u_mat[6];\n" +
-    "uniform sampler2D u_dfg;\n" +
-    "uniform vec4 u_lights[" + (MAX_LIGHTS * 5) + "];\n" +
-    "uniform int u_nlights;\n" +
-    "uniform vec4 u_fog[2];\n" +
-    "uniform vec3 u_cam;\n" +
-    "uniform mat4 u_view;\n" +
-    "uniform mat3 u_uvt;\n" +
-    "uniform sampler2D u_map;\n" +
-    "uniform int u_hasMap, u_points, u_hasNormal, u_opaque, u_tone;\n" +
-    "uniform float u_exposure;\n" +
-    "out vec4 o_color;\n" +
+  // colour-space helpers and three.js's tone mapping operators (tonemapping_pars_fragment)
+  var COMMON = "" +
     "vec3 toLinear(vec3 c) { return mix(c * 0.0773993808, pow(c * 0.9478672986 + 0.0521327014, vec3(2.4)), step(0.04045, c)); }\n" +
     "vec3 toSrgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(c, vec3(0.41666)) - 0.055, step(0.0031308, c)); }\n" +
-    // three.js's tone mapping operators (tonemapping_pars_fragment)
     "vec3 rrtOdt(vec3 v) { vec3 a = v * (v + 0.0245786) - 0.000090537; vec3 b = v * (0.983729 * v + 0.4329510) + 0.238081; return a / b; }\n" +
     "vec3 agxContrast(vec3 x) { vec3 x2 = x * x; vec3 x4 = x2 * x2; return 15.5 * x4 * x2 - 40.14 * x4 * x + 31.96 * x4 - 6.868 * x2 * x + 0.4298 * x2 + 0.1191 * x - 0.00232; }\n" +
     "vec3 toneMap(vec3 c) {\n" +
@@ -107,10 +42,92 @@
     "    float g = 1.0 - 1.0 / (0.15 * (peak - np) + 1.0); return mix(c, vec3(np), g);\n" +
     "  }\n" +
     "  return c;\n" +
-    "}\n" +
+    "}\n";
+  var VS = "#version 300 es\n" +
+    "layout(location=0) in vec3 a_position;\n" +
+    "layout(location=1) in vec3 a_normal;\n" +
+    "layout(location=2) in vec2 a_uv;\n" +
+    "layout(location=3) in vec3 a_color;\n" +
+    "layout(location=4) in vec4 a_im0;\n" +
+    "layout(location=5) in vec4 a_im1;\n" +
+    "layout(location=6) in vec4 a_im2;\n" +
+    "layout(location=7) in vec4 a_im3;\n" +
+    "layout(location=8) in vec3 a_icolor;\n" +
+    "layout(location=9) in float a_lineDistance;\n" +
+    "uniform sampler2D u_dispMap;\n" +
+    "uniform int u_hasDisp;\n" +
+    "uniform mat3 u_dispT;\n" +
+    "uniform float u_dispScale, u_dispBias, u_dashScale;\n" +
+    "uniform mat4 u_model, u_view, u_proj;\n" +
+    "uniform mat3 u_uvt;\n" +
+    "uniform int u_instanced;\n" +
+    "uniform float u_pointSize, u_pointScale;\n" +
+    "uniform int u_sizeAtt, u_sprite;\n" +
+    "uniform vec2 u_center;\n" +
+    "uniform float u_rotation;\n" +
+    "out vec3 v_world; out vec3 v_normal; out vec2 v_uv; out vec2 v_uv0; out vec3 v_color; out float v_depth; out float v_lineDist;\n" +
+    "void main() {\n" +
+    "  mat4 m = u_model;\n" +
+    "  if (u_instanced == 1) m = u_model * mat4(a_im0, a_im1, a_im2, a_im3);\n" +
+    // displacement along the normal; the shading normal stays as it was (three.js)
+    "  vec3 pos = a_position;\n" +
+    "  if (u_hasDisp == 1) pos += normalize(a_normal) * (texture(u_dispMap, (u_dispT * vec3(a_uv, 1.0)).xy).x * u_dispScale + u_dispBias);\n" +
+    "  v_lineDist = u_dashScale * a_lineDistance;\n" +
+    "  vec4 w = m * vec4(pos, 1.0);\n" +
+    "  v_world = w.xyz;\n" +
+    "  v_normal = mat3(transpose(inverse(m))) * a_normal;\n" +
+    "  v_uv = (u_uvt * vec3(a_uv, 1.0)).xy;\n" +
+    "  v_color = a_color * a_icolor;\n" +
+    "  vec4 vp = u_view * w;\n" +
+    "  v_depth = -vp.z;\n" +
+    "  gl_Position = u_proj * vp;\n" +
+    "  v_uv0 = a_uv;\n" +
+    // a sprite: a camera-facing quad scaled by the model's scale (three.js's sprite_vert)
+    "  if (u_sprite == 1) {\n" +
+    "    vec4 mv = u_view * u_model * vec4(0.0, 0.0, 0.0, 1.0);\n" +
+    "    vec2 sc = vec2(length(u_model[0].xyz), length(u_model[1].xyz));\n" +
+    "    if (u_sizeAtt == 0 && u_proj[2][3] == -1.0) sc *= -mv.z;\n" +
+    "    vec2 ap = (a_position.xy - (u_center - vec2(0.5))) * sc;\n" +
+    "    mv.xy += vec2(cos(u_rotation) * ap.x - sin(u_rotation) * ap.y, sin(u_rotation) * ap.x + cos(u_rotation) * ap.y);\n" +
+    "    v_world = (inverse(u_view) * mv).xyz; v_normal = vec3(0.0, 0.0, 1.0); v_depth = -mv.z;\n" +
+    "    gl_Position = u_proj * mv;\n" +
+    "  }\n" +
+    "  gl_PointSize = max(1.0, u_sizeAtt == 1 ? u_pointSize * u_pointScale / max(-vp.z, 1e-4) : u_pointSize);\n" +
+    "}\n";
+  var FS = "#version 300 es\n" +
+    "precision highp float;\n" +
+    "in vec3 v_world; in vec3 v_normal; in vec2 v_uv; in vec2 v_uv0; in vec3 v_color; in float v_depth; in float v_lineDist;\n" +
+    "uniform int u_dashed;\n" +
+    "uniform float u_dashSize, u_dashTotal, u_bumpScale;\n" +
+    "uniform sampler2D u_bumpMap;\n" +
+    "uniform vec4 u_sheen;\n" +
+    "uniform sampler2D u_emap;\n" +
+    "uniform int u_hasEmap;\n" +
+    // extra maps: bit 1 alpha, 2 roughness, 4 metalness, 8 normal, 16 ao, 32 matcap, 64 gradient; u_t: their uv transforms
+    "uniform sampler2D u_alphaMap, u_roughMap, u_metalMap, u_normalMap, u_aoMap, u_matcap, u_gradMap;\n" +
+    "uniform int u_maps, u_linearOut, u_premult;\n" +
+    "uniform mat3 u_t[6];\n" +
+    "uniform vec2 u_normalScale;\n" +
+    "uniform float u_aoIntensity;\n" +
+    "uniform mat3 u_euvt;\n" +
+    "uniform vec4 u_mat[6];\n" +
+    "uniform sampler2D u_dfg;\n" +
+    "uniform vec4 u_lights[" + (MAX_LIGHTS * 5) + "];\n" +
+    "uniform int u_nlights;\n" +
+    "uniform vec4 u_fog[2];\n" +
+    "uniform vec3 u_cam;\n" +
+    "uniform mat4 u_view;\n" +
+    "uniform mat3 u_uvt;\n" +
+    "uniform sampler2D u_map;\n" +
+    "uniform int u_hasMap, u_points, u_hasNormal, u_opaque, u_tone;\n" +
+    "uniform float u_exposure;\n" +
+    "out vec4 o_color;\n" +
+    COMMON +
     "bool has(int b) { return (u_maps & b) != 0; }\n" +
+    "float sheenAlbedo(float nv, float r) { float r2 = r * r, ri = 1.0 / (r + 0.1); float a = -1.9362 + 1.0678 * r + 0.4573 * r2 - 0.8469 * ri; float b = -0.6014 + 0.5538 * r - 0.4670 * r2 - 0.1255 * ri; return clamp(exp(a * clamp(nv, 0.0, 1.0) + b), 0.0, 1.0); }\n" +
     "vec2 tuv(int i) { return (u_t[i] * vec3(v_uv0, 1.0)).xy; }\n" +
     "void main() {\n" +
+    "  if (u_dashed == 1 && mod(v_lineDist, u_dashTotal) > u_dashSize) discard;\n" +
     "  vec4 c0 = u_mat[0], c1 = u_mat[1], c2 = u_mat[2], c3 = u_mat[3], c4 = u_mat[4], c5 = u_mat[5];\n" +
     "  int mode = int(c3.w + 0.5);\n" +
     "  vec3 albedo = c0.rgb * v_color;\n" +
@@ -139,6 +156,15 @@
     "    tt *= sc; bb *= sc;\n" +
     "    if (c4.x > 1.5 && c4.y < 0.5 && u_hasNormal == 1 && !gl_FrontFacing) { tt = -tt; bb = -bb; }\n" +
     "    n = normalize(mat3(tt, bb, n) * mapN);\n" +
+    "  } else if (has(128)) {\n" +
+    // bump map: the height's screen-space slope tilts the normal (three.js's perturbNormalArb)
+    "    vec2 buv = tuv(5), sx = dFdx(buv), sy = dFdy(buv);\n" +
+    "    float hll = u_bumpScale * texture(u_bumpMap, buv).x;\n" +
+    "    vec2 dh = vec2(u_bumpScale * texture(u_bumpMap, buv + sx).x - hll, u_bumpScale * texture(u_bumpMap, buv + sy).x - hll);\n" +
+    "    vec3 sgx = normalize(dFdx(v_world)), sgy = normalize(dFdy(v_world));\n" +
+    "    vec3 r1 = cross(sgy, n), r2 = cross(n, sgx);\n" +
+    "    float det = dot(sgx, r1) * (gl_FrontFacing ? 1.0 : -1.0);\n" +
+    "    n = normalize(abs(det) * n - sign(det) * (dh.x * r1 + dh.y * r2));\n" +
     "  }\n" +
     "  float ao = has(16) ? (texture(u_aoMap, tuv(4)).r - 1.0) * u_aoIntensity + 1.0 : 1.0;\n" +
     "  vec3 color;\n" +
@@ -173,6 +199,10 @@
     "    vec3 f0 = mix(vec3(0.04), albedo, metal);\n" +
     "    float nv = clamp(dot(n, toEye), 0.0, 1.0);\n" +
     "    vec2 dfgV = texture(u_dfg, vec2(rough, nv)).rg;\n" +
+    // sheen (Charlie distribution, Neubelt visibility) and its energy loss on the rest
+    "    bool sheenOn = physical && u_sheen.a > 0.0;\n" +
+    "    float shR = max(u_sheen.a, 0.0001), shMax = max(u_sheen.r, max(u_sheen.g, u_sheen.b));\n" +
+    "    vec3 sheenSpec = vec3(0.0);\n" +
     "    for (int i = 0; i < " + MAX_LIGHTS + "; i++) {\n" +
     "      if (i >= u_nlights) break;\n" +
     "      vec4 l0 = u_lights[i * 5], l1 = u_lights[i * 5 + 1], l2 = u_lights[i * 5 + 2], l3 = u_lights[i * 5 + 3], l4 = u_lights[i * 5 + 4];\n" +
@@ -191,7 +221,7 @@
     "          k *= e * e * (3.0 - 2.0 * e);\n" +
     "        }\n" +
     "      }\n" +
-    "      vec3 diffuse = vec3(1.0);\n" +
+    "      vec3 diffuse = vec3(1.0); float shComp = 1.0;\n" +
     "      if (directional) {\n" +
     "        float nl = dot(n, dir);\n" +
     "        diffuse = vec3(max(nl, 0.0));\n" +
@@ -200,6 +230,14 @@
     "          vec2 coord = vec2(nl * 0.5 + 0.5, 0.0);\n" +
     "          if (has(64)) diffuse = vec3(texture(u_gradMap, coord).r);\n" +
     "          else { float fw = fwidth(coord.x) * 0.5; diffuse = vec3(mix(0.7, 1.0, smoothstep(0.7 - fw, 0.7 + fw, coord.x))); }\n" +
+    "        }\n" +
+    "        if (sheenOn) {\n" +
+    "          float nlc0 = clamp(nl, 0.0, 1.0); vec3 hs = normalize(dir + toEye); float nhs = clamp(dot(n, hs), 0.0, 1.0);\n" +
+    "          float sa = shR * shR, s2 = max(1.0 - nhs * nhs, 0.0078125);\n" +
+    "          float Dc = (2.0 + 1.0 / sa) * pow(s2, 0.5 / sa) / 6.283185307;\n" +
+    "          float Vn = clamp(1.0 / (4.0 * (nlc0 + nv - nlc0 * nv)), 0.0, 1.0);\n" +
+    "          sheenSpec += c * (l1.w * k * nlc0) * u_sheen.rgb * (Dc * Vn);\n" +
+    "          shComp = 1.0 - shMax * max(sheenAlbedo(nv, shR), sheenAlbedo(nlc0, shR));\n" +
     "        }\n" +
     "        if (physical && nl > 0.0) {\n" +
     "          vec3 h = normalize(dir + toEye);\n" +
@@ -215,7 +253,7 @@
     "          float emsV = 1.0 - (dfgV.x + dfgV.y), emsL = 1.0 - (dfgL.x + dfgL.y);\n" +
     "          vec3 favg = f0 + (1.0 - f0) * 0.047619;\n" +
     "          vec3 fms = fssV * fssL * favg / (1.0 - emsV * emsL * favg + 1e-6);\n" +
-    "          pspec += c * (l1.w * k * nlc) * (F * (V * D) + fms * emsV * emsL);\n" +
+    "          pspec += c * (l1.w * k * nlc * shComp) * (F * (V * D) + fms * emsV * emsL);\n" +
     "        } else if (c3.z > 0.5 && nl > 0.0) {\n" +
     "          vec3 h = normalize(dir + toEye);\n" +
     "          float s = pow(max(dot(n, h), 0.0), c2.w) * (c2.w + 2.0) / 8.0 * 0.3183098862;\n" +
@@ -223,9 +261,10 @@
     "        }\n" +
     "      }\n" +
     "      if (kind < 1.5) ind += c * (l1.w * 0.3183098862);\n" +
-    "      else dif += c * diffuse * (l1.w * k * 0.3183098862);\n" +
+    "      else dif += c * diffuse * (l1.w * k * 0.3183098862 * (directional ? shComp : 1.0));\n" +
     "    }\n" +
-    "    color = albedo * (dif + ind * ao) * dscale + c2.rgb * spec + pspec + emissive;\n" +
+    "    if (sheenOn) ind *= 1.0 - shMax * sheenAlbedo(nv, shR);\n" +
+    "    color = albedo * (dif + ind * ao) * dscale + c2.rgb * spec + pspec + emissive + sheenSpec;\n" +
     "  }\n" +
     // MeshNormalMaterial and MeshDepthMaterial write their values as is (no colour space)
     "  bool raw = mode == 2 || mode == 3;\n" +
@@ -251,7 +290,8 @@
     { prop: "normalMap", uniform: "u_normalMap", unit: 6, bit: 8, t: 3 },
     { prop: "aoMap", uniform: "u_aoMap", unit: 7, bit: 16, t: 4 },
     { prop: "matcap", uniform: "u_matcap", unit: 8, bit: 32, t: -1 },
-    { prop: "gradientMap", uniform: "u_gradMap", unit: 9, bit: 64, t: -1 }
+    { prop: "gradientMap", uniform: "u_gradMap", unit: 9, bit: 64, t: -1 },
+    { prop: "bumpMap", uniform: "u_bumpMap", unit: 13, bit: 128, t: 5 }
   ];
   // three.js blend constants -> GL
   var EQUATIONS = { 100: 32774, 101: 32778, 102: 32779, 103: 32775, 104: 32776 };
@@ -279,15 +319,18 @@
     this.prog = prog;
     var names = ["u_model", "u_view", "u_proj", "u_uvt", "u_instanced", "u_pointSize", "u_pointScale", "u_sizeAtt", "u_mat", "u_lights",
       "u_nlights", "u_fog", "u_cam", "u_map", "u_hasMap", "u_points", "u_hasNormal", "u_opaque", "u_tone", "u_exposure", "u_sprite", "u_center", "u_rotation", "u_emap", "u_hasEmap", "u_euvt", "u_dfg",
-      "u_alphaMap", "u_roughMap", "u_metalMap", "u_normalMap", "u_aoMap", "u_matcap", "u_gradMap", "u_maps", "u_linearOut", "u_premult", "u_t", "u_normalScale", "u_aoIntensity"];
+      "u_alphaMap", "u_roughMap", "u_metalMap", "u_normalMap", "u_aoMap", "u_matcap", "u_gradMap", "u_maps", "u_linearOut", "u_premult", "u_t", "u_normalScale", "u_aoIntensity",
+      "u_dispMap", "u_hasDisp", "u_dispT", "u_dispScale", "u_dispBias", "u_dashScale", "u_dashed", "u_dashSize", "u_dashTotal", "u_bumpScale", "u_bumpMap", "u_sheen"];
     this.u = {};
     for (var i = 0; i < names.length; i++) this.u[names[i]] = gl.getUniformLocation(prog, names[i]);
     this.buffers = new WeakMap();   // attribute -> { buf, version }
     this.wire = new WeakMap();      // geometry -> { buf, count, key }
     this.textures = new WeakMap();  // texture -> { tex, version }
     this.vao = gl.createVertexArray();
+    this.emptyVao = gl.createVertexArray();
+    this.envs = new WeakMap();      // equirect texture -> prefiltered levels
     this.lightData = new Float32Array(MAX_LIGHTS * 20);
-    this.mapTransforms = new Float32Array(45);
+    this.mapTransforms = new Float32Array(54);
     this.textureCount = 0;
     // the DFG table for Standard/Physical lighting (renderers/dfg_table.rs)
     this.dfg = gl.createTexture();
@@ -381,6 +424,231 @@
     return e.tex;
   };
 
+
+  // Background textures and the prefiltered environment ("PMREM": the
+  // same face layout, level sizes and GGX filtering as three.js, so blurred
+  // backgrounds and, later, environment lighting match it). A level is a
+  // 3 x 2 atlas of cube faces, each `size` texels with a one-texel border.
+  var FULL_VS = "#version 300 es\n" +
+    "void main() { vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)); gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0); }\n";
+  var CUBE_UV = "" +
+    "float faceOf(vec3 d) { vec3 a = abs(d); if (a.x > a.z) return a.x > a.y ? (d.x > 0.0 ? 0.0 : 3.0) : (d.y > 0.0 ? 1.0 : 4.0); return a.z > a.y ? (d.z > 0.0 ? 2.0 : 5.0) : (d.y > 0.0 ? 1.0 : 4.0); }\n" +
+    "vec2 faceUv(vec3 d, float f) {\n" +
+    "  vec2 uv;\n" +
+    "  if (f == 0.0) uv = vec2(d.z, d.y) / abs(d.x); else if (f == 1.0) uv = vec2(-d.x, -d.z) / abs(d.y);\n" +
+    "  else if (f == 2.0) uv = vec2(-d.x, d.y) / abs(d.z); else if (f == 3.0) uv = vec2(-d.z, d.y) / abs(d.x);\n" +
+    "  else if (f == 4.0) uv = vec2(-d.x, d.z) / abs(d.y); else uv = vec2(d.x, d.y) / abs(d.z);\n" +
+    "  return 0.5 * (uv + 1.0);\n" +
+    "}\n" +
+    "vec3 faceDir(vec2 uv, float f) {\n" +
+    "  uv = 2.0 * uv - 1.0; vec3 d = vec3(uv, 1.0);\n" +
+    "  if (f == 0.0) d = d.zyx; else if (f == 1.0) { d = d.xzy; d.xz *= -1.0; } else if (f == 2.0) d.x *= -1.0;\n" +
+    "  else if (f == 3.0) { d = d.zyx; d.xz *= -1.0; } else if (f == 4.0) { d = d.xzy; d.xy *= -1.0; } else d.z *= -1.0;\n" +
+    "  return d;\n" +
+    "}\n" +
+    "vec3 cubeUv(sampler2D t, vec3 d, float s) {\n" +
+    "  float f = faceOf(d); vec2 uv = faceUv(d, f) * (s - 2.0) + 1.0;\n" +
+    "  if (f > 2.0) { uv.y += s; f -= 3.0; }\n" +
+    "  uv.x += f * s;\n" +
+    "  return textureLod(t, uv / vec2(3.0 * s, 2.0 * s), 0.0).rgb;\n" +
+    "}\n" +
+    "vec2 equirectUv(vec3 d) { return vec2(atan(d.z, d.x) * 0.1591549431 + 0.5, asin(clamp(d.y, -1.0, 1.0)) * 0.3183098862 + 0.5); }\n";
+  var PMREM_FS = "#version 300 es\n" +
+    "precision highp float;\n" +
+    "uniform sampler2D u_src;\n" +
+    "uniform int u_pass;\n" +
+    "uniform float u_size, u_sizeIn, u_rough;\n" +
+    "out vec4 o_color;\n" +
+    CUBE_UV +
+    "float vdc(uint b) { b = (b << 16u) | (b >> 16u); b = ((b & 0x55555555u) << 1u) | ((b & 0xAAAAAAAAu) >> 1u); b = ((b & 0x33333333u) << 2u) | ((b & 0xCCCCCCCCu) >> 2u);\n" +
+    "  b = ((b & 0x0F0F0F0Fu) << 4u) | ((b & 0xF0F0F0F0u) >> 4u); b = ((b & 0x00FF00FFu) << 8u) | ((b & 0xFF00FF00u) >> 8u); return float(b) * 2.3283064365386963e-10; }\n" +
+    "void main() {\n" +
+    "  vec2 px = gl_FragCoord.xy; float col = floor(px.x / u_size), row = floor(px.y / u_size);\n" +
+    "  vec3 n = normalize(faceDir((px - vec2(col, row) * u_size - 1.0) / (u_size - 2.0), col + 3.0 * row));\n" +
+    "  vec3 c;\n" +
+    "  if (u_pass == 0) c = texture(u_src, equirectUv(n)).rgb;\n" +
+    "  else if (u_rough < 0.001) c = cubeUv(u_src, n, u_sizeIn);\n" +
+    "  else {\n" +
+    // GGX visible-normal sampling around n with the view along n (Heitz 2018), weighted by n.l
+    "    vec3 up = abs(n.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);\n" +
+    "    vec3 tx = normalize(cross(up, n)), ty = cross(n, tx);\n" +
+    "    float a = u_rough * u_rough; vec3 sum = vec3(0.0); float wsum = 0.0;\n" +
+    "    for (uint i = 0u; i < 256u; i++) {\n" +
+    "      float r = sqrt(float(i) / 256.0), phi = 6.283185307 * vdc(i);\n" +
+    "      float t1 = r * cos(phi), t2 = r * sin(phi);\n" +
+    "      vec3 nh = vec3(t1, t2, sqrt(max(0.0, 1.0 - t1 * t1 - t2 * t2)));\n" +
+    "      vec3 ht = normalize(vec3(a * nh.x, a * nh.y, max(0.0, nh.z)));\n" +
+    "      vec3 h = normalize(tx * ht.x + ty * ht.y + n * ht.z);\n" +
+    "      vec3 l = normalize(2.0 * dot(n, h) * h - n);\n" +
+    "      float nl = max(dot(n, l), 0.0);\n" +
+    "      if (nl > 0.0) { sum += cubeUv(u_src, l, u_sizeIn) * nl; wsum += nl; }\n" +
+    "    }\n" +
+    "    c = wsum > 0.0 ? sum / wsum : vec3(0.0);\n" +
+    "  }\n" +
+    "  o_color = vec4(c, 1.0);\n" +
+    "}\n";
+  var BG_FS = "#version 300 es\n" +
+    "precision highp float;\n" +
+    "uniform int u_mode, u_tone, u_linearOut;\n" +
+    "uniform float u_exposure, u_intensity, u_lod, u_mipF, u_sizeA, u_sizeB;\n" +
+    "uniform sampler2D u_tex, u_lvA, u_lvB;\n" +
+    "uniform mat3 u_uvt, u_rot;\n" +
+    "uniform mat4 u_view, u_proj;\n" +
+    "uniform vec2 u_vp;\n" +
+    "out vec4 o_color;\n" +
+    COMMON + CUBE_UV +
+    "void main() {\n" +
+    "  vec2 q = gl_FragCoord.xy / u_vp;\n" +
+    "  vec4 c = vec4(0.0, 0.0, 0.0, 1.0);\n" +
+    "  if (u_mode == 1) c = texture(u_tex, (u_uvt * vec3(q, 1.0)).xy);\n" +
+    "  else {\n" +
+    "    mat4 ip = inverse(u_proj); vec4 a = ip * vec4(q * 2.0 - 1.0, -1.0, 1.0), b = ip * vec4(q * 2.0 - 1.0, 1.0, 1.0);\n" +
+    "    vec3 d = normalize(u_rot * (inverse(mat3(u_view)) * (b.xyz / b.w - a.xyz / a.w)));\n" +
+    "    if (u_mode == 2) c.rgb = textureLod(u_tex, equirectUv(d), u_lod).rgb;\n" +
+    "    else { c.rgb = cubeUv(u_lvA, d, u_sizeA); if (u_mipF > 0.0) c.rgb = mix(c.rgb, cubeUv(u_lvB, d, u_sizeB), u_mipF); }\n" +
+    "  }\n" +
+    "  c.rgb *= u_intensity;\n" +
+    "  if (u_tone > 0) c.rgb = toneMap(c.rgb);\n" +
+    "  c.rgb = max(c.rgb, 0.0);\n" +
+    "  if (u_linearOut == 0) c.rgb = toSrgb(c.rgb);\n" +
+    "  o_color = c;\n" +
+    "}\n";
+
+  function program(gl, vs, fs, names) {
+    var prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, vs));
+    gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error("WebGL2 program: " + gl.getProgramInfoLog(prog));
+    var u = {};
+    for (var i = 0; i < names.length; i++) u[names[i]] = gl.getUniformLocation(prog, names[i]);
+    return { prog: prog, u: u };
+  }
+
+  // the roughness -> level mapping of the prefiltered environment (three.js's roughnessToMip)
+  function roughnessToMip(r) {
+    if (r >= 0.8) return (1.0 - r) * (-1.0 + 2.0) / 0.2 - 2.0;
+    if (r >= 0.4) return (0.8 - r) * (2.0 + 1.0) / 0.4 - 1.0;
+    if (r >= 0.305) return (0.4 - r) * (3.0 - 2.0) / (0.4 - 0.305) + 2.0;
+    if (r >= 0.21) return (0.305 - r) * (4.0 - 3.0) / (0.305 - 0.21) + 3.0;
+    return -2.0 * Math.log2(1.16 * r);
+  }
+
+  // the prefiltered levels of an equirectangular texture, made once per texture version
+  B.pmrem = function (tex) {
+    var gl = this.gl, e = this.envs.get(tex);
+    if (e && e.version === tex.version) return e;
+    var img = tex.image;
+    var w = img && (img.width || img.naturalWidth || img.videoWidth);
+    if (!w) return null;
+    if (!this.pm) {
+      this.pm = program(gl, FULL_VS, PMREM_FS, ["u_src", "u_pass", "u_size", "u_sizeIn", "u_rough"]);
+      this.fbo = gl.createFramebuffer();
+      this.halfFloat = !!gl.getExtension("EXT_color_buffer_float");
+    }
+    if (e) for (var d = 0; d < e.levels.length; d++) gl.deleteTexture(e.levels[d]);
+    var lodMax = Math.floor(Math.log2(w / 4)), cube = Math.pow(2, lodMax);
+    var n = lodMax - 4 + 1 + 6, sizes = [], levels = [];
+    for (var i = 0; i < n; i++) sizes.push(i > lodMax - 4 ? 16 : Math.pow(2, lodMax - i));
+    var self = this, pm = this.pm, u = pm.u;
+    var make = function (s) {
+      var t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, self.halfFloat ? gl.RGBA16F : gl.RGBA8, 3 * s, 2 * s, 0, gl.RGBA, self.halfFloat ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return t;
+    };
+    var pass = function (target, s, src, kind, sIn, rough) {
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, target, 0);
+      gl.viewport(0, 0, 3 * s, 2 * s);
+      gl.activeTexture(gl.TEXTURE0);
+      if (kind === 0) self.texture(tex); else gl.bindTexture(gl.TEXTURE_2D, src);
+      gl.uniform1i(u.u_pass, kind); gl.uniform1f(u.u_size, s); gl.uniform1f(u.u_sizeIn, sIn); gl.uniform1f(u.u_rough, rough);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    };
+    gl.useProgram(pm.prog);
+    gl.bindVertexArray(this.emptyVao);
+    gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.disable(gl.POLYGON_OFFSET_FILL);
+    gl.colorMask(true, true, true, true);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+    gl.uniform1i(u.u_src, 0);
+    levels.push(make(cube));
+    pass(levels[0], cube, null, 0, 0, 0);
+    // each level filters the one before it with the extra roughness between them (three.js's _applyGGXFilter)
+    for (var k = 1; k < n; k++) {
+      var target = k / (n - 1), source = (k - 1) / (n - 1);
+      var rough = Math.sqrt(target * target - source * source) * (target * 1.25);
+      var tmp = make(sizes[k]);
+      pass(tmp, sizes[k], levels[k - 1], 1, sizes[k - 1], rough);
+      levels.push(make(sizes[k]));
+      pass(levels[k], sizes[k], tmp, 1, sizes[k], 0);
+      gl.deleteTexture(tmp);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    e = { version: tex.version, levels: levels, sizes: sizes, lodMax: lodMax };
+    this.envs.set(tex, e);
+    return e;
+  };
+
+  // scene.background when it is a texture: a screen-filling texture (uv
+  // mapping) or the world seen through an equirectangular map, blurred
+  // through the prefiltered levels when backgroundBlurriness > 0
+  B.background = function (scene, plan, linearOut, w, h) {
+    var gl = this.gl, tex = scene.background;
+    if (!tex || tex.isColor || !tex.image) return;
+    var equirect = tex.mapping === 303 || tex.mapping === 304;
+    var blur = scene.backgroundBlurriness || 0;
+    var env = equirect && blur > 0 ? this.pmrem(tex) : null;
+    if (!this.bg) this.bg = program(gl, FULL_VS, BG_FS, ["u_mode", "u_tone", "u_linearOut", "u_exposure", "u_intensity", "u_lod", "u_mipF", "u_sizeA", "u_sizeB",
+      "u_tex", "u_lvA", "u_lvB", "u_uvt", "u_rot", "u_view", "u_proj", "u_vp"]);
+    var bg = this.bg, u = bg.u;
+    gl.useProgram(bg.prog);
+    gl.bindVertexArray(this.emptyVao);
+    gl.viewport(0, 0, w, h);
+    gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.depthMask(false);
+    gl.uniform1i(u.u_tex, 0); gl.uniform1i(u.u_lvA, 10); gl.uniform1i(u.u_lvB, 11);
+    gl.uniform2f(u.u_vp, w, h);
+    gl.uniformMatrix4fv(u.u_view, false, plan.view.elements);
+    gl.uniformMatrix4fv(u.u_proj, false, plan.projection.elements);
+    var rot = new T.Matrix4();
+    if (scene.backgroundRotation) rot.makeRotationFromEuler(scene.backgroundRotation);
+    var re = rot.elements;
+    gl.uniformMatrix3fv(u.u_rot, false, [re[0], re[1], re[2], re[4], re[5], re[6], re[8], re[9], re[10]]);
+    gl.uniform1f(u.u_intensity, scene.backgroundIntensity == null ? 1 : scene.backgroundIntensity);
+    // three.js tone-maps a background unless its texture is sRGB (the prefiltered levels are linear)
+    gl.uniform1i(u.u_tone, tex.colorSpace === "srgb" && !env ? 0 : this.tone);
+    gl.uniform1f(u.u_exposure, this.renderer.toneMappingExposure === undefined ? 1 : this.renderer.toneMappingExposure);
+    gl.uniform1i(u.u_linearOut, linearOut ? 1 : 0);
+    if (env) {
+      var mip = Math.min(Math.max(roughnessToMip(blur), -2), env.lodMax);
+      var mi = Math.floor(mip), mf = mip - mi;
+      var a = env.lodMax - mi, b = Math.max(0, a - 1);
+      gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, env.levels[a]);
+      gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D, env.levels[b]);
+      gl.uniform1f(u.u_sizeA, env.sizes[a]); gl.uniform1f(u.u_sizeB, env.sizes[b]);
+      gl.uniform1f(u.u_mipF, mf);
+      gl.uniform1i(u.u_mode, 3);
+    } else {
+      gl.activeTexture(gl.TEXTURE0);
+      if (!this.texture(tex)) return;
+      if (equirect) {
+        // the mip level whose texel is one screen pixel wide (no derivative jump at the seam)
+        var pixel = 2 * Math.atan(1 / Math.abs(plan.projection.elements[5])) / h;
+        gl.uniform1f(u.u_lod, Math.max(0, Math.log2(pixel / (2 * Math.PI / (tex.image.width || 1)))));
+        gl.uniform1i(u.u_mode, 2);
+      } else {
+        if (tex.matrixAutoUpdate !== false && tex.updateMatrix) tex.updateMatrix();
+        gl.uniformMatrix3fv(u.u_uvt, false, tex.matrix.elements);
+        gl.uniform1i(u.u_mode, 1);
+      }
+    }
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.activeTexture(gl.TEXTURE0);
+  };
+
   B.render = function (scene, camera) {
     var gl = this.gl, u = this.u, r = this.renderer, soft = r._soft;
     var plan = R.RenderersPlan.plan_frame(scene, camera, soft.clear_color, soft.clear_alpha);
@@ -392,6 +660,10 @@
     gl.depthMask(true);
     gl.colorMask(true, true, true, true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    // tone mapping (three.js constants: 0 none, 1 linear, 2 Reinhard, 3 Cineon, 4 ACES filmic, 6 AgX, 7 neutral)
+    this.tone = r.toneMapping | 0;
+    this.background(scene, plan, linearOut, w, h);
+    gl.depthMask(true);
     gl.useProgram(this.prog);
     gl.bindVertexArray(this.vao);
     gl.enable(gl.DEPTH_TEST);
@@ -407,8 +679,6 @@
     gl.uniform4fv(u.u_fog, plan.fog);
     gl.uniform1f(u.u_pointScale, h * 0.5);
     gl.uniform1f(u.u_exposure, r.toneMappingExposure === undefined ? 1 : r.toneMappingExposure);
-    // tone mapping (three.js constants: 0 none, 1 linear, 2 Reinhard, 3 Cineon, 4 ACES filmic, 6 AgX, 7 neutral)
-    this.tone = r.toneMapping | 0;
     gl.uniform1i(u.u_map, 0);
     gl.uniform1i(u.u_emap, 1);
     gl.uniform1i(u.u_dfg, 2);
@@ -416,6 +686,7 @@
     gl.bindTexture(gl.TEXTURE_2D, this.dfg);
     gl.activeTexture(gl.TEXTURE0);
     for (var mi = 0; mi < MAPS.length; mi++) gl.uniform1i(u[MAPS[mi].uniform], MAPS[mi].unit);
+    gl.uniform1i(u.u_dispMap, 12);
     gl.uniform1i(u.u_linearOut, linearOut ? 1 : 0);
     var info = { triangles: 0, lines: 0, points: 0, calls: 0 };
     var override = scene.overrideMaterial || null;
@@ -495,6 +766,31 @@
     this.attrib(2, geometry.getAttribute("uv"), 2, [0, 0, 0, 0]);
     this.attrib(3, mu[18] ? geometry.getAttribute("color") : null, 3, [1, 1, 1, 1]);
     gl.uniform1i(u.u_hasNormal, hasNormal ? 1 : 0);
+    var dashed = !!material.isLineDashedMaterial || material.type === "LineDashedMaterial";
+    this.attrib(9, dashed ? geometry.getAttribute("lineDistance") : null, 1, [0, 0, 0, 0]);
+    gl.uniform1i(u.u_dashed, dashed ? 1 : 0);
+    if (dashed) {
+      gl.uniform1f(u.u_dashScale, material.scale == null ? 1 : material.scale);
+      gl.uniform1f(u.u_dashSize, material.dashSize == null ? 3 : material.dashSize);
+      gl.uniform1f(u.u_dashTotal, (material.dashSize == null ? 3 : material.dashSize) + (material.gapSize == null ? 1 : material.gapSize));
+    } else gl.uniform1f(u.u_dashScale, 0);
+    var disp = mesh ? material.displacementMap : null, glD = null;
+    if (disp) {
+      gl.activeTexture(gl.TEXTURE12);
+      glD = this.texture(disp);
+      gl.activeTexture(gl.TEXTURE0);
+      if (glD) {
+        if (disp.matrixAutoUpdate !== false && disp.updateMatrix) disp.updateMatrix();
+        gl.uniformMatrix3fv(u.u_dispT, false, disp.matrix.elements);
+        gl.uniform1f(u.u_dispScale, material.displacementScale == null ? 1 : material.displacementScale);
+        gl.uniform1f(u.u_dispBias, material.displacementBias || 0);
+      }
+    }
+    gl.uniform1i(u.u_hasDisp, glD ? 1 : 0);
+    gl.uniform1f(u.u_bumpScale, material.bumpScale == null ? 1 : material.bumpScale);
+    var sheen = material.sheen || 0, shc = material.sheenColor;
+    if (sheen > 0 && shc) gl.uniform4f(u.u_sheen, shc.r * sheen, shc.g * sheen, shc.b * sheen, Math.min(1, Math.max(0.0001, material.sheenRoughness == null ? 1 : material.sheenRoughness)));
+    else gl.uniform4f(u.u_sheen, 0, 0, 0, 0);
     var instances = 0;
     if (kind === 2 && o.instanceMatrix) {
       var im = o.instanceMatrix;
@@ -518,7 +814,8 @@
     gl.uniform1i(u.u_instanced, instances > 0 ? 1 : 0);
     var map = material.map, glTex = map ? this.texture(map) : null;
     gl.uniform1i(u.u_hasMap, glTex ? 1 : 0);
-    gl.uniform1i(u.u_points, kind === 6 ? 1 : 0);
+    // points sample the map across each point, unless the geometry has uvs (then one texel per point, as three.js)
+    gl.uniform1i(u.u_points, kind === 6 && !geometry.getAttribute("uv") ? 1 : 0);
     gl.uniform1i(u.u_sprite, sprite ? 1 : 0);
     if (sprite) {
       var ce = o.center || { x: 0.5, y: 0.5 };
