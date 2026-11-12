@@ -354,7 +354,7 @@
       sfp.call(this, points);
       return this;
     });
-    var tni = p.to_non_indexed, dc = p.deep_clone, cpy = p.copy;
+    var tni = p.to_non_indexed, dc = p.deep_clone, cpy = p.copy_from;
     def(p, "toNonIndexed", function () {
       if (this.index === null) { console.warn("THREE.BufferGeometry.toNonIndexed(): BufferGeometry is already non-indexed."); return this; }
       var g = tni.call(this);
@@ -1108,34 +1108,31 @@
   (function () {
     var p = T.InstancedMesh.prototype;
     var MI = R.CoreObject3d;
-    def(p, "setMatrixAt", function (i, m) { this.instanceMatrix.array.set(m.elements, i * 16); return this; });
-    def(p, "getMatrixAt", function (i, m) { return m.fromArray(this.instanceMatrix.array, i * 16); });
+    var B = R.CoreBounds;
+    def(p, "setMatrixAt", function (i, m) { B.set_instance_matrix_at(this.kind.f0, i, m); return this; });
+    def(p, "getMatrixAt", function (i, m) { return m.copy(B.instance_matrix_at(this.kind.f0, i)); });
     def(p, "setColorAt", function (i, c) {
-      if (this.instanceColor === null) {
-        var n = this.instanceMatrix.count;
-        this.instanceColor = new T.InstancedBufferAttribute(new Float32Array(n * 3).fill(1), 3);
-      }
-      this.instanceColor.array.set([c.r, c.g, c.b], i * 3);
+      O.ensure_instance_colors(this.kind.f0);
+      this.instanceColor.setXYZ(i, c.r, c.g, c.b);
       return this;
     });
-    def(p, "getColorAt", function (i, c) { return c.fromArray(this.instanceColor.array, i * 3); });
-    def(p, "computeBoundingBox", function () {
-      var g = this.geometry, n = this.count, m = new T.Matrix4(), b = new T.Box3();
-      if (g.boundingBox === null) g.computeBoundingBox();
-      if (this._bb === undefined || this._bb === null) def(this, "_bb", new T.Box3());
-      this._bb.makeEmpty();
-      for (var i = 0; i < n; i++) { this.getMatrixAt(i, m); b.copy(g.boundingBox).applyMatrix4(m); this._bb.union(b); }
-    });
-    def(p, "computeBoundingSphere", function () {
-      var g = this.geometry, n = this.count, m = new T.Matrix4(), s = new T.Sphere();
-      if (g.boundingSphere === null) g.computeBoundingSphere();
-      if (this._bs === undefined || this._bs === null) def(this, "_bs", new T.Sphere());
-      this._bs.makeEmpty();
-      for (var i = 0; i < n; i++) { this.getMatrixAt(i, m); s.copy(g.boundingSphere).applyMatrix4(m); this._bs.union(s); }
-    });
+    def(p, "getColorAt", function (i, c) { return c.fromBufferAttribute(this.instanceColor, i); });
+    def(p, "computeBoundingBox", function () { def(this, "_bb", B.instance_bounding_box(this.kind.f0)); });
+    def(p, "computeBoundingSphere", function () { def(this, "_bs", B.instance_bounding_sphere(this.kind.f0)); });
     accessor(p, "boundingBox", function () { return this._bb === undefined ? null : this._bb; }, function (v) { def(this, "_bb", v); });
     accessor(p, "boundingSphere", function () { return this._bs === undefined ? null : this._bs; }, function (v) { def(this, "_bs", v); });
     def(p, "dispose", function () { this.dispatchEvent({ type: "dispose" }); return this; });
+  })();
+
+  def(T.Mesh.prototype, "getVertexPosition", function (i, target) { return target.copy(O.vertex_position(this.kind.f0, i)); });
+  def(T.Line.prototype, "computeLineDistances", function () { O.compute_line_distances(this.geometry, false); return this; });
+  def(T.LineSegments.prototype, "computeLineDistances", function () { O.compute_line_distances(this.geometry, true); return this; });
+  (function () {
+    var B = R.CoreBounds, b3 = T.Box3.prototype, fr = T.Frustum.prototype;
+    def(b3, "setFromObject", function (o, precise) { return this.copy(B.box_from_object(o, precise === true)); });
+    def(b3, "expandByObject", function (o, precise) { B.expand_by_object(this, o, precise === true); return this; });
+    def(fr, "intersectsObject", function (o) { var s = B.world_bounding_sphere(o); return s ? this.intersects_sphere(s) : false; });
+    def(fr, "intersectsSprite", function (o) { var s = B.world_bounding_sphere(o); return s ? this.intersects_sphere(s) : false; });
   })();
 
   // Sprite
@@ -1145,10 +1142,33 @@
   F.flag(T.Sprite, "isSprite");
 
   // LOD
-  T.LOD = kindClass(T.Object3D, "Lod", function () { return R.Object3D.lod(); });
+  T.LOD = kindClass(T.Object3D, "Lod", function () { return R.Object3D.lod(); }, ["levels", "auto_update"]);
   F.flag(T.LOD, "isLOD");
+  (function () {
+    var p = T.LOD.prototype;
+    def(p, "addLevel", function (object, distance, hysteresis) {
+      object.removeFromParent();
+      O.lod_add_level(this, object, distance || 0, hysteresis || 0);
+      object.dispatchEvent({ type: "added" });
+      this.dispatchEvent({ type: "childadded", child: object });
+      return this;
+    });
+    def(p, "removeLevel", function (distance) {
+      var levels = this.levels;
+      for (var i = 0; i < levels.length; i++) {
+        if (levels[i].distance === distance) { var r = levels.splice(i, 1); this.remove(r[0].object); return true; }
+      }
+      return false;
+    });
+    def(p, "getCurrentLevel", function () { return this.kind.f0.current_level; });
+    def(p, "getObjectForDistance", function (d) { var o = O.lod_object_for_distance(this, d); return o === undefined ? null : o; });
+    def(p, "update", function (camera) { O.lod_update(this, camera); });
+  })();
 
   // cameras
+  [["full_width", "fullWidth"], ["full_height", "fullHeight"], ["offset_x", "offsetX"], ["offset_y", "offsetY"]].forEach(function (e) {
+    rename(R.ViewOffset.prototype, e[0], e[1]);
+  });
   var CAMERA_FIELDS = ["fov", "aspect", "near", "far", "zoom", "focus", "film_gauge", "film_offset", "left", "right", "top", "bottom",
     "view", "projection_matrix", "projection_matrix_inverse", "matrix_world_inverse"];
   T.Camera = klass(T.Object3D, function () {
@@ -1272,4 +1292,123 @@
   accessor(T.PointLight.prototype, "power", function () { return this.intensity * 4 * Math.PI; }, function (v) { this.intensity = v / (4 * Math.PI); });
   accessor(T.SpotLight.prototype, "power", function () { return this.intensity * Math.PI; }, function (v) { this.intensity = v / Math.PI; });
   accessor(T.RectAreaLight.prototype, "power", function () { return this.intensity * this.width * this.height * Math.PI; }, function (v) { this.intensity = v / (this.width * this.height * Math.PI); });
+  // ---- Raycaster ---------------------------------------------------------
+  T.Raycaster = function Raycaster(origin, direction, near, far) {
+    var r = R.Raycaster.new_(origin ? origin.clone() : new T.Vector3(), direction ? direction.clone() : new T.Vector3(0, 0, -1),
+      near === undefined ? 0 : near, far === undefined ? Infinity : far);
+    setProto(r, T.Raycaster, new.target);
+    return r;
+  };
+  T.Raycaster.prototype = R.Raycaster.prototype;
+  def(R.Raycaster.prototype, "constructor", T.Raycaster);
+  aliases(R.Raycaster);
+  nullable(R.Raycaster.prototype, ["camera"]);
+  (function () {
+    var p = R.Raycaster.prototype;
+    accessor(p, "params", function () {
+      if (!this._params) {
+        var self = this, line = {}, points = {};
+        accessor(line, "threshold", function () { return self.line_threshold; }, function (v) { self.line_threshold = v; });
+        accessor(points, "threshold", function () { return self.points_threshold; }, function (v) { self.points_threshold = v; });
+        Object.defineProperty(line, "threshold", { enumerable: true });
+        Object.defineProperty(points, "threshold", { enumerable: true });
+        def(this, "_params", { Mesh: {}, Line: line, LOD: {}, Points: points, Sprite: {} });
+      }
+      return this._params;
+    }, function (v) {
+      if (v && v.Line && v.Line.threshold !== undefined) this.line_threshold = v.Line.threshold;
+      if (v && v.Points && v.Points.threshold !== undefined) this.points_threshold = v.Points.threshold;
+    });
+    var sfc = p.set_from_camera, io = p.intersect_object, ios = p.intersect_objects;
+    def(p, "setFromCamera", function (coords, camera) {
+      if (!camera.isPerspectiveCamera && !camera.isOrthographicCamera) { console.error("THREE.Raycaster: Unsupported camera type: " + camera.type); return; }
+      sfc.call(this, coords, camera);
+    });
+    def(p, "setFromXRController", function (controller) {
+      var m = new T.Matrix4().identity().extractRotation(controller.matrixWorld);
+      this.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+      this.ray.direction.set(0, 0, -1).applyMatrix4(m);
+      return this;
+    });
+    // a crate Intersection as the plain object three.js answers
+    function hit(h) {
+      var o = { distance: h.distance, point: h.point, object: h.object };
+      if (h.face !== undefined && h.face !== null) {
+        if (h.uv !== undefined) o.uv = h.uv;
+        if (h.uv1 !== undefined) o.uv1 = h.uv1;
+        if (h.normal !== undefined) o.normal = h.normal;
+        var f = h.face;
+        o.face = { a: f.a, b: f.b, c: f.c, normal: f.normal, materialIndex: f.material_index };
+        o.barycoord = h.barycoord;
+        o.faceIndex = h.face_index;
+        if (h.instance_id !== undefined) o.instanceId = h.instance_id;
+      } else if (h.index !== undefined) {
+        if (h.distance_to_ray !== undefined) o.distanceToRay = h.distance_to_ray;
+        o.index = h.index; o.face = null; o.faceIndex = null; o.barycoord = null;
+      } else {
+        o.uv = h.uv === undefined ? null : h.uv; o.face = null;
+      }
+      return o;
+    }
+    function collect(list, intersects) {
+      for (var i = 0; i < list.length; i++) intersects.push(hit(list[i]));
+      intersects.sort(function (a, b) { return a.distance - b.distance; });
+      return intersects;
+    }
+    def(p, "intersectObject", function (object, recursive, intersects) {
+      if (this.camera === null && hasSprite(object, recursive !== false)) console.error("THREE.Sprite: \"Raycaster.camera\" needs to be set in order to raycast against sprites.");
+      return collect(io.call(this, object, recursive !== false), intersects || []);
+    });
+    def(p, "intersectObjects", function (objects, recursive, intersects) {
+      return collect(ios.call(this, objects, recursive !== false), intersects || []);
+    });
+    function hasSprite(o, deep) {
+      if (o.isSprite) return true;
+      if (deep) for (var i = 0; i < o.children.length; i++) if (hasSprite(o.children[i], true)) return true;
+      return false;
+    }
+  })();
+
+  // ---- Clock / Timer -----------------------------------------------------
+  function now() { return typeof performance !== "undefined" && performance.now ? performance.now() : Date.now(); }
+  T.Clock = function Clock(autoStart) {
+    var c = R.Clock.new_(autoStart !== false);
+    setProto(c, T.Clock, new.target);
+    return c;
+  };
+  T.Clock.prototype = R.Clock.prototype;
+  def(R.Clock.prototype, "constructor", T.Clock);
+  (function () {
+    var p = R.Clock.prototype;
+    camelFields(p, R.Clock.new_(true));
+    var st = p.start, sp = p.stop, ge = p.get_elapsed_time, gd = p.get_delta;
+    def(p, "start", function () { st.call(this, now()); });
+    def(p, "stop", function () { sp.call(this, now()); });
+    def(p, "getElapsedTime", function () { return ge.call(this, now()); });
+    def(p, "getDelta", function () { return gd.call(this, now()); });
+  })();
+  T.Timer = function Timer() {
+    var t = R.Timer.new_(now());
+    setProto(t, T.Timer, new.target);
+    return t;
+  };
+  T.Timer.prototype = R.Timer.prototype;
+  def(R.Timer.prototype, "constructor", T.Timer);
+  (function () {
+    var p = R.Timer.prototype;
+    var up = p.update, rs = p.reset, sts = p.set_timescale;
+    def(p, "getDelta", p.get_delta);
+    def(p, "getElapsed", p.get_elapsed);
+    def(p, "getTimescale", p.get_timescale);
+    def(p, "setTimescale", function (s) { sts.call(this, s); return this; });
+    def(p, "reset", function () { rs.call(this, now()); return this; });
+    def(p, "update", function (timestamp) {
+      if (this._doc && this._doc.hidden === true) { this.delta = 0; return this; }
+      up.call(this, timestamp !== undefined ? timestamp : now());
+      return this;
+    });
+    def(p, "connect", function (doc) { def(this, "_doc", doc); });
+    def(p, "disconnect", function () { def(this, "_doc", null); });
+    def(p, "dispose", function () { def(this, "_doc", null); });
+  })();
 })(THREE, RangerThreeCore);

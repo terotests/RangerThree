@@ -8,6 +8,14 @@ use super::plane::Plane;
 use super::sphere::Sphere;
 use super::vector3::Vector3;
 
+/// Where a ray passes closest to a segment.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SegmentHit {
+    pub distance_sq: f64,
+    pub point_on_ray: Vector3,
+    pub point_on_segment: Vector3,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ray {
     pub origin: Vector3,
@@ -81,6 +89,12 @@ impl Ray {
 
     /// Squared distance between the ray and the segment `v0..v1`.
     pub fn distance_sq_to_segment(&self, v0: &Vector3, v1: &Vector3) -> f64 {
+        self.segment_hit(v0, v1).distance_sq
+    }
+
+    /// The closest points of the ray and the segment `v0`-`v1`, and their
+    /// squared distance.
+    pub fn segment_hit(&self, v0: &Vector3, v1: &Vector3) -> SegmentHit {
         let mut seg_center = *v0;
         seg_center.add(v1).multiply_scalar(0.5);
         let mut seg_dir = *v1;
@@ -122,6 +136,7 @@ impl Ray {
                 s1 = if s0 > 0.0 { -seg_extent } else { (-seg_extent).max(seg_extent.min(-b1)) };
                 sqr_dist = -s0 * s0 + s1 * (s1 + 2.0 * b1) + c;
             } else if s1 <= ext_det {
+                s0 = 0.0;
                 s1 = (-seg_extent).max(seg_extent.min(-b1));
                 sqr_dist = s1 * (s1 + 2.0 * b1) + c;
             } else {
@@ -134,7 +149,13 @@ impl Ray {
             s0 = (-(a01 * s1 + b0)).max(0.0);
             sqr_dist = -s0 * s0 + s1 * (s1 + 2.0 * b1) + c;
         }
-        sqr_dist
+        let mut on_ray = self.direction;
+        on_ray.multiply_scalar(s0);
+        on_ray.add(&self.origin);
+        let mut on_segment = seg_dir;
+        on_segment.multiply_scalar(s1);
+        on_segment.add(&seg_center);
+        SegmentHit { distance_sq: sqr_dist, point_on_ray: on_ray, point_on_segment: on_segment }
     }
 
     pub fn intersect_sphere(&self, sphere: &Sphere) -> Option<Vector3> {

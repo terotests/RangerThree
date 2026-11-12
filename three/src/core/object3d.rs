@@ -34,6 +34,7 @@ pub type ObjectRef = Rc<RefCell<Object3D>>;
 /// defaults).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewOffset {
+    pub enabled: bool,
     pub full_width: f64,
     pub full_height: f64,
     pub offset_x: f64,
@@ -128,7 +129,7 @@ impl CameraData {
         let mut height = 2.0 * top;
         let mut width = self.aspect * height;
         let mut left = -0.5 * width;
-        if let Some(view) = &self.view {
+        if let Some(view) = self.view.filter(|v| v.enabled) {
             left += view.offset_x * width / view.full_width;
             top -= view.offset_y * height / view.full_height;
             width *= view.width / view.full_width;
@@ -153,7 +154,7 @@ impl CameraData {
         let mut right = cx + dx;
         let mut top = cy + dy;
         let mut bottom = cy - dy;
-        if let Some(view) = &self.view {
+        if let Some(view) = self.view.filter(|v| v.enabled) {
             let scale_w = (self.right - self.left) / view.full_width / self.zoom;
             let scale_h = (self.top - self.bottom) / view.full_height / self.zoom;
             left += scale_w * view.offset_x;
@@ -307,6 +308,14 @@ pub struct LodLevel {
     pub hysteresis: f64,
 }
 
+/// A level-of-detail switch: the levels by distance, the one shown last.
+#[derive(Clone)]
+pub struct LodData {
+    pub levels: Vec<LodLevel>,
+    pub current_level: i64,
+    pub auto_update: bool,
+}
+
 #[derive(Clone)]
 pub struct SpriteData {
     pub geometry: GeometryRef,
@@ -335,7 +344,7 @@ pub enum ObjectKind {
     PointLight(LightData),
     SpotLight(LightData),
     RectAreaLight(LightData),
-    Lod(Vec<LodLevel>),
+    Lod(LodData),
 }
 
 impl ObjectKind {
@@ -544,7 +553,7 @@ impl Object3D {
     }
 
     pub fn lod() -> Object3D {
-        Object3D::new(ObjectKind::Lod(Vec::new()))
+        Object3D::new(ObjectKind::Lod(LodData { levels: Vec::new(), current_level: 0, auto_update: true }))
     }
 
     pub fn type_name(&self) -> String {
@@ -791,8 +800,13 @@ impl Object3D {
     }
 
     pub fn set_view_offset(&mut self, full_width: f64, full_height: f64, x: f64, y: f64, width: f64, height: f64) {
+        let perspective = matches!(self.kind, ObjectKind::PerspectiveCamera(_));
         if let Some(c) = self.camera_mut() {
+            if perspective {
+                c.aspect = full_width / full_height;
+            }
             c.view = Some(ViewOffset {
+                enabled: true,
                 full_width,
                 full_height,
                 offset_x: x,
@@ -806,7 +820,10 @@ impl Object3D {
 
     pub fn clear_view_offset(&mut self) {
         if let Some(c) = self.camera_mut() {
-            c.view = None;
+            if let Some(mut v) = c.view {
+                v.enabled = false;
+                c.view = Some(v);
+            }
         }
         self.update_projection_matrix();
     }
@@ -1094,5 +1111,155 @@ pub fn ensure_instance_colors(data: &mut MeshData) {
     if data.instance_color.is_none() {
         let n = data.count as usize;
         data.instance_color = Some(BufferAttribute::new(vec![1.0; n * 3], 3, ArrayKind::Float32, false).shared());
+    }
+}
+
+/// A mesh vertex's position with the morph targets applied (three.js
+/// `Mesh.getVertexPosition`).
+pub fn vertex_position(data: &MeshData, index: usize) -> Vector3 {
+    let g = data.geometry.borrow();
+    let mut target = match g.get_attribute("position") {
+        Some(p) => p.borrow().get_vector3(index),
+        None => return Vector3::zero(),
+    };
+    if let Some(morphs) = g.morph_attributes.get("position") {
+        let influences = &data.morph_target_influences;
+        let mut morph = Vector3::zero();
+        for (i, attr) in morphs.iter().enumerate() {
+            if i >= influences.len() {
+                break;
+            }
+            let influence = influences[i];
+            if influence == 0.0 {
+                continue;
+            }
+            let mut v = attr.borrow().get_vector3(index);
+            if !g.morph_targets_relative {
+                v.sub(&target);
+            }
+            morph.add_scaled_vector(&v, influence);
+        }
+        target.add(&morph);
+    }
+    target
+}
+
+/// The `lineDistance` attribute a dashed line reads: the distance along the
+/// line to each vertex. `segments` pairs vertices as LineSegments does.
+pub fn compute_line_distances(geometry: &GeometryRef, segments: bool) {
+    let mut g = geometry.borrow_mut();
+    if g.index.is_some() {
+        return;
+    }
+    let pos = match g.get_attribute("position") {
+        Some(p) => p,
+        None => return,
+    };
+    let p = pos.borrow();
+    let count = p.count;
+    let mut d: Vec<f64> = vec![0.0; count];
+    if segments {
+        let mut i = 0;
+        while i + 1 < count {
+            let start = p.get_vector3(i);
+            let end = p.get_vector3(i + 1);
+            d[i] = if i == 0 { 0.0 } else { d[i - 1] };
+            d[i + 1] = d[i] + start.distance_to(&end);
+            i += 2;
+        }
+    } else {
+        for i in 1..count {
+            let start = p.get_vector3(i - 1);
+            let end = p.get_vector3(i);
+            d[i] = d[i - 1] + start.distance_to(&end);
+        }
+    }
+    g.set_attribute("lineDistance", BufferAttribute::new(d, 1, ArrayKind::Float32, false).shared());
+}
+
+/// Adds `object` as `lod`'s child shown from `distance` on.
+pub fn lod_add_level(lod: &ObjectRef, object: &ObjectRef, distance: f64, hysteresis: f64) {
+    let distance = distance.abs();
+    {
+        let mut o = lod.borrow_mut();
+        if let ObjectKind::Lod(d) = &mut o.kind {
+            let mut at = d.levels.len();
+            for (l, level) in d.levels.iter().enumerate() {
+                if distance < level.distance {
+                    at = l;
+                    break;
+                }
+            }
+            d.levels.insert(at, LodLevel { object: object.clone(), distance, hysteresis });
+        }
+    }
+    add(lod, object);
+}
+
+/// The level object for a viewing distance.
+pub fn lod_object_for_distance(lod: &ObjectRef, distance: f64) -> Option<ObjectRef> {
+    let o = lod.borrow();
+    let d = match &o.kind {
+        ObjectKind::Lod(d) => d,
+        _ => return None,
+    };
+    if d.levels.is_empty() {
+        return None;
+    }
+    let mut i = 1;
+    while i < d.levels.len() {
+        let level = &d.levels[i];
+        let mut level_distance = level.distance;
+        if level.object.borrow().visible {
+            level_distance -= level_distance * level.hysteresis;
+        }
+        if distance < level_distance {
+            break;
+        }
+        i += 1;
+    }
+    Some(d.levels[i - 1].object.clone())
+}
+
+/// Shows the level for `camera`'s distance and hides the others.
+pub fn lod_update(lod: &ObjectRef, camera: &ObjectRef) {
+    let mut v1 = Vector3::zero();
+    let zoom = {
+        let c = camera.borrow();
+        v1.set_from_matrix_position(&c.matrix_world);
+        match c.camera() {
+            Some(cd) => cd.zoom,
+            None => 1.0,
+        }
+    };
+    let mut o = lod.borrow_mut();
+    let mut v2 = Vector3::zero();
+    v2.set_from_matrix_position(&o.matrix_world);
+    let distance = v1.distance_to(&v2) / zoom;
+    if let ObjectKind::Lod(d) = &mut o.kind {
+        let n = d.levels.len();
+        if n <= 1 {
+            return;
+        }
+        d.levels[0].object.borrow_mut().visible = true;
+        let mut i = 1;
+        while i < n {
+            let mut level_distance = d.levels[i].distance;
+            if d.levels[i].object.borrow().visible {
+                level_distance -= level_distance * d.levels[i].hysteresis;
+            }
+            if distance >= level_distance {
+                d.levels[i - 1].object.borrow_mut().visible = false;
+                d.levels[i].object.borrow_mut().visible = true;
+            } else {
+                break;
+            }
+            i += 1;
+        }
+        d.current_level = (i - 1) as i64;
+        while i < n {
+            d.levels[i].object.borrow_mut().visible = false;
+            i += 1;
+        }
     }
 }

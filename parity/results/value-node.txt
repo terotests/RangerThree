@@ -1,5 +1,5 @@
-value (node): 771/872
-Vector2 55/55, Vector3 78/78, Vector4 51/51, Matrix3 27/27, Matrix4 40/40, Quaternion 31/32, Euler 15/15, Color 44/44, Box2 23/23, Box3 31/35, Sphere 22/22, Plane 20/20, Ray 21/21, Line3 13/14, Triangle 17/18, Spherical 7/7, Cylindrical 6/6, Frustum 8/10, MathUtils 23/24, Object3D 54/54, Layers 9/9, EventDispatcher 4/4, Timer 0/4, Clock 0/4, BufferAttribute 37/37, BufferGeometry 31/33, Raycaster 0/15, Curve 0/18, PerspectiveCamera 16/18, OrthographicCamera 6/6, Camera 1/3, Mesh 4/5, Group 1/1, Scene 4/4, Fog 2/2, FogExp2 2/2, Sprite 1/1, Points 1/1, Line 1/2, LineSegments 1/1, LineLoop 1/1, InstancedMesh 6/6, LOD 0/2, SkinnedMesh 0/2, Material 26/26, Light 10/12, Texture 19/19, Loader 0/8, Misc 2/10, Animation 0/20
+value (node): 808/872
+Vector2 55/55, Vector3 78/78, Vector4 51/51, Matrix3 27/27, Matrix4 40/40, Quaternion 31/32, Euler 15/15, Color 44/44, Box2 23/23, Box3 34/35, Sphere 22/22, Plane 20/20, Ray 21/21, Line3 13/14, Triangle 17/18, Spherical 7/7, Cylindrical 6/6, Frustum 10/10, MathUtils 24/24, Object3D 54/54, Layers 9/9, EventDispatcher 4/4, Timer 4/4, Clock 4/4, BufferAttribute 37/37, BufferGeometry 33/33, Raycaster 15/15, Curve 0/18, PerspectiveCamera 18/18, OrthographicCamera 6/6, Camera 1/3, Mesh 5/5, Group 1/1, Scene 4/4, Fog 2/2, FogExp2 2/2, Sprite 1/1, Points 1/1, Line 2/2, LineSegments 1/1, LineLoop 1/1, InstancedMesh 6/6, LOD 2/2, SkinnedMesh 0/2, Material 26/26, Light 10/12, Texture 19/19, Loader 0/8, Misc 2/10, Animation 0/20
 
 PASS value:Vector2.new
 PASS value:Vector2.width
@@ -372,8 +372,8 @@ FAIL value:Box3.setFromArray
 PASS value:Box3.setFromBufferAttribute
 PASS value:Box3.setFromPoints
 PASS value:Box3.setFromCenterAndSize
-FAIL value:Box3.setFromObject
-FAIL value:Box3.setFromObjectPrecise
+PASS value:Box3.setFromObject
+PASS value:Box3.setFromObjectPrecise
 PASS value:Box3.clone
 PASS value:Box3.copy
 PASS value:Box3.makeEmpty
@@ -383,7 +383,7 @@ PASS value:Box3.getSize
 PASS value:Box3.expandByPoint
 PASS value:Box3.expandByVector
 PASS value:Box3.expandByScalar
-FAIL value:Box3.expandByObject
+PASS value:Box3.expandByObject
 PASS value:Box3.containsPoint
 PASS value:Box3.containsBox
 PASS value:Box3.getParameter
@@ -516,8 +516,8 @@ PASS value:Frustum.containsPoint
 PASS value:Frustum.containsOrigin
 PASS value:Frustum.intersectsSphere
 PASS value:Frustum.intersectsBox
-FAIL value:Frustum.intersectsObject
-FAIL value:Frustum.intersectsSprite
+PASS value:Frustum.intersectsObject
+PASS value:Frustum.intersectsSprite
 PASS value:Frustum.clone
 PASS value:MathUtils.DEG2RAD
 PASS value:MathUtils.RAD2DEG
@@ -534,7 +534,7 @@ PASS value:MathUtils.smootherstep
 PASS value:MathUtils.randInt
 PASS value:MathUtils.randFloat
 PASS value:MathUtils.randFloatSpread
-FAIL value:MathUtils.seededRandom
+PASS value:MathUtils.seededRandom
 PASS value:MathUtils.degToRad
 PASS value:MathUtils.radToDeg
 PASS value:MathUtils.isPowerOfTwo
@@ -610,14 +610,14 @@ PASS value:EventDispatcher.addEventListener
 PASS value:EventDispatcher.hasEventListener
 PASS value:EventDispatcher.removeEventListener
 PASS value:EventDispatcher.dispatchEvent
-FAIL value:Timer.new
-FAIL value:Timer.setTimescale
-FAIL value:Timer.update
-FAIL value:Timer.reset
-FAIL value:Clock.new
-FAIL value:Clock.start
-FAIL value:Clock.stop
-FAIL value:Clock.getDelta
+PASS value:Timer.new
+PASS value:Timer.setTimescale
+PASS value:Timer.update
+PASS value:Timer.reset
+PASS value:Clock.new
+PASS value:Clock.start
+PASS value:Clock.stop
+PASS value:Clock.getDelta
 PASS value:BufferAttribute.new
 PASS value:BufferAttribute.Float32BufferAttribute
 PASS value:BufferAttribute.Uint16BufferAttribute
@@ -677,32 +677,32 @@ PASS value:BufferGeometry.center
 PASS value:BufferGeometry.setFromPoints
 PASS value:BufferGeometry.computeBoundingBox
 PASS value:BufferGeometry.computeBoundingSphere
-FAIL value:BufferGeometry.computeTangents
+PASS value:BufferGeometry.computeTangents
 PASS value:BufferGeometry.computeVertexNormals
 PASS value:BufferGeometry.normalizeNormals
 PASS value:BufferGeometry.toNonIndexed
 PASS value:BufferGeometry.toJSON
-FAIL value:BufferGeometry.clone
+PASS value:BufferGeometry.clone
 PASS value:BufferGeometry.copy
 PASS value:BufferGeometry.dispose
 PASS value:BufferGeometry.morphAttributes
 PASS value:BufferGeometry.InstancedBufferGeometry
 PASS value:BufferGeometry.mergeVertices
-FAIL value:Raycaster.new
-FAIL value:Raycaster.set
-FAIL value:Raycaster.setFromCamera
-FAIL value:Raycaster.setFromCameraOrtho
-FAIL value:Raycaster.intersectObject
-FAIL value:Raycaster.intersectObjects
-FAIL value:Raycaster.recursive
-FAIL value:Raycaster.nearFar
-FAIL value:Raycaster.layers
-FAIL value:Raycaster.sphere
-FAIL value:Raycaster.backSide
-FAIL value:Raycaster.points
-FAIL value:Raycaster.line
-FAIL value:Raycaster.sprite
-FAIL value:Raycaster.instanced
+PASS value:Raycaster.new
+PASS value:Raycaster.set
+PASS value:Raycaster.setFromCamera
+PASS value:Raycaster.setFromCameraOrtho
+PASS value:Raycaster.intersectObject
+PASS value:Raycaster.intersectObjects
+PASS value:Raycaster.recursive
+PASS value:Raycaster.nearFar
+PASS value:Raycaster.layers
+PASS value:Raycaster.sphere
+PASS value:Raycaster.backSide
+PASS value:Raycaster.points
+PASS value:Raycaster.line
+PASS value:Raycaster.sprite
+PASS value:Raycaster.instanced
 FAIL value:Curve.CatmullRomCurve3
 FAIL value:Curve.CatmullRomCurve3Closed
 FAIL value:Curve.getPoints
@@ -733,8 +733,8 @@ PASS value:PerspectiveCamera.getFilmWidth
 PASS value:PerspectiveCamera.getFilmHeight
 PASS value:PerspectiveCamera.getViewBounds
 PASS value:PerspectiveCamera.getViewSize
-FAIL value:PerspectiveCamera.setViewOffset
-FAIL value:PerspectiveCamera.clearViewOffset
+PASS value:PerspectiveCamera.setViewOffset
+PASS value:PerspectiveCamera.clearViewOffset
 PASS value:PerspectiveCamera.getWorldDirection
 PASS value:PerspectiveCamera.lookAt
 PASS value:PerspectiveCamera.clone
@@ -749,7 +749,7 @@ PASS value:Camera.ArrayCamera
 FAIL value:Camera.CubeCamera
 FAIL value:Camera.StereoCamera
 PASS value:Mesh.new
-FAIL value:Mesh.getVertexPosition
+PASS value:Mesh.getVertexPosition
 PASS value:Mesh.updateMorphTargets
 PASS value:Mesh.clone
 PASS value:Mesh.materialArray
@@ -765,7 +765,7 @@ PASS value:FogExp2.clone
 PASS value:Sprite.new
 PASS value:Points.new
 PASS value:Line.new
-FAIL value:Line.computeLineDistances
+PASS value:Line.computeLineDistances
 PASS value:LineSegments.new
 PASS value:LineLoop.new
 PASS value:InstancedMesh.new
@@ -774,8 +774,8 @@ PASS value:InstancedMesh.setColorAt
 PASS value:InstancedMesh.computeBoundingBox
 PASS value:InstancedMesh.computeBoundingSphere
 PASS value:InstancedMesh.dispose
-FAIL value:LOD.new
-FAIL value:LOD.update
+PASS value:LOD.new
+PASS value:LOD.update
 FAIL value:SkinnedMesh.bones
 FAIL value:SkinnedMesh.bind
 PASS value:Material.MeshBasicMaterial

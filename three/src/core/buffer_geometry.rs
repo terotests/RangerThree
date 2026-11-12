@@ -269,6 +269,95 @@ impl BufferGeometry {
     }
 
     /// Smooth normals: each vertex gets the sum of its faces' normals.
+    /// A `tangent` attribute (xyz plus handedness w) from positions,
+    /// normals and uvs of an indexed geometry; nothing when one is missing.
+    pub fn compute_tangents(&mut self) {
+        let index = match &self.index {
+            Some(i) => i.clone(),
+            None => return,
+        };
+        let (pos, nor, uvs) = match (self.get_attribute("position"), self.get_attribute("normal"), self.get_attribute("uv")) {
+            (Some(p), Some(n), Some(u)) => (p, n, u),
+            _ => return,
+        };
+        let count = pos.borrow().count;
+        let mut tan1: Vec<Vector3> = Vec::new();
+        let mut tan2: Vec<Vector3> = Vec::new();
+        for _i in 0..count {
+            tan1.push(Vector3::zero());
+            tan2.push(Vector3::zero());
+        }
+        let mut groups: Vec<GeometryGroup> = self.groups.clone();
+        if groups.is_empty() {
+            groups.push(GeometryGroup { start: 0, count: index.borrow().count as i64, material_index: 0 });
+        }
+        let p = pos.borrow();
+        let uv = uvs.borrow();
+        let ix = index.borrow();
+        for g in groups.iter() {
+            let mut j = g.start as usize;
+            let end = (g.start + g.count) as usize;
+            while j < end {
+                let a = ix.get_x(j) as usize;
+                let b = ix.get_x(j + 1) as usize;
+                let c = ix.get_x(j + 2) as usize;
+                let va = p.get_vector3(a);
+                let mut vb = p.get_vector3(b);
+                let mut vc = p.get_vector3(c);
+                vb.sub(&va);
+                vc.sub(&va);
+                let ub_x = uv.get_x(b) - uv.get_x(a);
+                let ub_y = uv.get_y(b) - uv.get_y(a);
+                let uc_x = uv.get_x(c) - uv.get_x(a);
+                let uc_y = uv.get_y(c) - uv.get_y(a);
+                let r = 1.0 / (ub_x * uc_y - uc_x * ub_y);
+                if r == r && r != INFINITY && r != -INFINITY {
+                    let mut sdir = vb;
+                    sdir.multiply_scalar(uc_y);
+                    sdir.add_scaled_vector(&vc, -ub_y);
+                    sdir.multiply_scalar(r);
+                    let mut tdir = vc;
+                    tdir.multiply_scalar(ub_x);
+                    tdir.add_scaled_vector(&vb, -uc_x);
+                    tdir.multiply_scalar(r);
+                    tan1[a].add(&sdir);
+                    tan1[b].add(&sdir);
+                    tan1[c].add(&sdir);
+                    tan2[a].add(&tdir);
+                    tan2[b].add(&tdir);
+                    tan2[c].add(&tdir);
+                }
+                j += 3;
+            }
+        }
+        let mut out: Vec<f64> = vec![0.0; count * 4];
+        let nn = nor.borrow();
+        for g in groups.iter() {
+            let mut j = g.start as usize;
+            let end = (g.start + g.count) as usize;
+            while j < end {
+                let v = ix.get_x(j) as usize;
+                let mut n = nn.get_vector3(v);
+                let n2 = n;
+                let t = tan1[v];
+                let mut tmp = t;
+                let d = n.dot(&t);
+                n.multiply_scalar(d);
+                tmp.sub(&n);
+                tmp.normalize();
+                let mut tmp2 = Vector3::zero();
+                tmp2.cross_vectors(&n2, &t);
+                let w = if tmp2.dot(&tan2[v]) < 0.0 { -1.0 } else { 1.0 };
+                out[v * 4] = tmp.x;
+                out[v * 4 + 1] = tmp.y;
+                out[v * 4 + 2] = tmp.z;
+                out[v * 4 + 3] = w;
+                j += 1;
+            }
+        }
+        self.set_attribute("tangent", BufferAttribute::new(out, 4, ArrayKind::Float32, false).shared());
+    }
+
     pub fn compute_vertex_normals(&mut self) {
         let position = match self.attributes.get("position") {
             Some(p) => p.clone(),
@@ -285,7 +374,7 @@ impl BufferGeometry {
         };
         let mut sums: Vec<f64> = vec![0.0; count * 3];
         let pos = position.borrow();
-        let mut add_face = |a: usize, b: usize, c: usize, sums: &mut Vec<f64>| {
+        let add_face = |a: usize, b: usize, c: usize, sums: &mut Vec<f64>| {
             let pa = pos.get_vector3(a);
             let pb = pos.get_vector3(b);
             let pc = pos.get_vector3(c);
@@ -345,7 +434,7 @@ impl BufferGeometry {
         let index = match &self.index {
             Some(i) => i.clone(),
             None => {
-                out.copy(self);
+                out.copy_from(self);
                 return out;
             }
         };
@@ -370,7 +459,7 @@ impl BufferGeometry {
     }
 
     /// A deep copy: attributes are copied, not shared.
-    pub fn copy(&mut self, source: &BufferGeometry) {
+    pub fn copy_from(&mut self, source: &BufferGeometry) {
         self.name = source.name.clone();
         self.type_name = source.type_name.clone();
         self.parameters = source.parameters.clone();
@@ -400,7 +489,7 @@ impl BufferGeometry {
 
     pub fn deep_clone(&self) -> BufferGeometry {
         let mut g = BufferGeometry::new();
-        g.copy(self);
+        g.copy_from(self);
         g
     }
 }

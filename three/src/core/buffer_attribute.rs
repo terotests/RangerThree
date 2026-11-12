@@ -115,7 +115,7 @@ impl BufferAttribute {
         self.update_ranges.clear();
     }
 
-    pub fn copy(&mut self, source: &BufferAttribute) {
+    pub fn copy_from(&mut self, source: &BufferAttribute) {
         self.name = source.name.clone();
         self.array = source.array.clone();
         self.item_size = source.item_size;

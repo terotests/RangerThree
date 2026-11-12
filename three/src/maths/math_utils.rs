@@ -133,12 +133,46 @@ pub fn normalize(value: f64, kind: ArrayKind) -> f64 {
 
 /// `(a * b) mod 2^32` for 32-bit operands, without a 64-bit overflow on
 /// any target (JavaScript's `Math.imul`, unsigned).
+const TWO32: i64 = 4294967296;
+
+/// `x` modulo 2^32, as an unsigned 32-bit number. The bit helpers below
+/// use only arithmetic that is exact in every Ranger target (JavaScript's
+/// bitwise operators work on signed 32-bit numbers).
+pub fn u32n(x: i64) -> i64 {
+    let v = x % TWO32;
+    if v < 0 {
+        v + TWO32
+    } else {
+        v
+    }
+}
+
+/// Unsigned 32-bit right shift (JavaScript's `>>>`).
+pub fn shr_u32(x: i64, n: i64) -> i64 {
+    let mut v = u32n(x);
+    for _i in 0..n {
+        v = v / 2;
+    }
+    v
+}
+
+pub fn xor_u32(a: i64, b: i64) -> i64 {
+    u32n(u32n(a) ^ u32n(b))
+}
+
+pub fn or_u32(a: i64, b: i64) -> i64 {
+    u32n(u32n(a) | u32n(b))
+}
+
+/// The low 32 bits of `a * b` (JavaScript's `Math.imul`, unsigned).
 pub fn mul_u32(a: i64, b: i64) -> i64 {
-    let a = a & 0xffffffff;
-    let b = b & 0xffffffff;
-    let lo = (a & 0xffff) * b;
-    let hi = (((a >> 16) & 0xffff) * b) & 0xffff;
-    (lo + (hi << 16)) & 0xffffffff
+    let a = u32n(a);
+    let b = u32n(b);
+    let a_lo = a % 65536;
+    let a_hi = (a - a_lo) / 65536;
+    let lo = a_lo * b;
+    let hi = u32n(a_hi * b) % 65536;
+    u32n(lo + hi * 65536)
 }
 
 /// A deterministic pseudo random source (mulberry32, as three.js's
@@ -150,15 +184,15 @@ pub struct Rng {
 
 impl Rng {
     pub fn new(seed: i64) -> Rng {
-        Rng { seed: seed & 0xffffffff }
+        Rng { seed: u32n(seed) }
     }
 
     pub fn next(&mut self) -> f64 {
-        self.seed = (self.seed + 0x6D2B79F5) & 0xffffffff;
+        self.seed = u32n(self.seed + 0x6D2B79F5);
         let mut t = self.seed;
-        t = mul_u32(t ^ (t >> 15), t | 1);
-        t ^= (t + mul_u32(t ^ (t >> 7), t | 61)) & 0xffffffff;
-        ((t ^ (t >> 14)) & 0xffffffff) as f64 / 4294967296.0
+        t = mul_u32(xor_u32(t, shr_u32(t, 15)), or_u32(t, 1));
+        t = xor_u32(t, t + mul_u32(xor_u32(t, shr_u32(t, 7)), or_u32(t, 61)));
+        xor_u32(t, shr_u32(t, 14)) as f64 / 4294967296.0
     }
 
     pub fn rand_int(&mut self, low: i64, high: i64) -> i64 {
