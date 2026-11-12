@@ -4,4 +4,8 @@
 
 #![allow(unused_imports)]
 
+pub mod core;
+pub mod materials;
 pub mod maths;
+pub mod scenes;
+pub mod textures;
