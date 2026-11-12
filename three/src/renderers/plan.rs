@@ -17,8 +17,8 @@ use crate::renderers::soft::{collect_lights, surface_of};
 use crate::scenes::fog::FogKind;
 use crate::textures::texture::UV_MAPPING;
 
-/// Floats per light in `RenderPlan::lights` (five vec4s).
-pub const LIGHT_STRIDE: i64 = 20;
+/// Floats per light in `RenderPlan::lights` (seven vec4s).
+pub const LIGHT_STRIDE: i64 = 28;
 /// Floats per material in `material_uniforms` (five vec4s).
 pub const MATERIAL_STRIDE: i64 = 24;
 
@@ -47,7 +47,8 @@ pub struct RenderPlan {
     pub fog: Vec<f64>,
     /// `LIGHT_STRIDE` floats per light:
     /// color.rgb, kind | ground.rgb, intensity | position.xyz, distance |
-    /// direction.xyz, decay | cos_outer, cos_inner, 0, 0
+    /// direction.xyz, decay | cos_outer, cos_inner, 0, 0 |
+    /// half_width.xyz, 0 | half_height.xyz, 0 (the last two for rect area lights)
     pub lights: Vec<f64>,
     pub light_count: i64,
     pub items: Vec<DrawItem>,
@@ -168,6 +169,14 @@ pub fn plan_frame(scene: &ObjectRef, camera: &ObjectRef, clear_color: &Color, cl
         lights.push(l.cos_outer);
         lights.push(l.cos_inner);
         lights.push(0.0);
+        lights.push(0.0);
+        lights.push(l.half_width.x);
+        lights.push(l.half_width.y);
+        lights.push(l.half_width.z);
+        lights.push(0.0);
+        lights.push(l.half_height.x);
+        lights.push(l.half_height.y);
+        lights.push(l.half_height.z);
         lights.push(0.0);
     }
     let mut opaque: Vec<DrawItem> = Vec::new();

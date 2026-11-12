@@ -101,6 +101,12 @@
     "uniform float u_dashSize, u_dashTotal, u_bumpScale;\n" +
     "uniform sampler2D u_bumpMap;\n" +
     "uniform vec4 u_sheen;\n" +
+    // transmission: amount, thickness, ior, attenuation distance (0 = none); the opaque scene behind
+    "uniform vec4 u_trans;\n" +
+    "uniform vec3 u_attColor;\n" +
+    "uniform sampler2D u_transMap;\n" +
+    "uniform vec2 u_transSize;\n" +
+    "uniform mat4 u_model, u_proj;\n" +
     "uniform sampler2D u_emap;\n" +
     "uniform int u_hasEmap;\n" +
     // extra maps: bit 1 alpha, 2 roughness, 4 metalness, 8 normal, 16 ao, 32 matcap, 64 gradient; u_t: their uv transforms
@@ -112,7 +118,8 @@
     "uniform mat3 u_euvt;\n" +
     "uniform vec4 u_mat[6];\n" +
     "uniform sampler2D u_dfg;\n" +
-    "uniform vec4 u_lights[" + (MAX_LIGHTS * 5) + "];\n" +
+    "uniform vec4 u_lights[" + (MAX_LIGHTS * 7) + "];\n" +
+    "uniform sampler2D u_ltc1, u_ltc2;\n" +
     "uniform int u_nlights;\n" +
     "uniform vec4 u_fog[2];\n" +
     "uniform vec3 u_cam;\n" +
@@ -124,6 +131,36 @@
     "out vec4 o_color;\n" +
     COMMON +
     "bool has(int b) { return (u_maps & b) != 0; }\n" +
+    // cubic B-spline filtered sample of a mip level pair (three.js's textureBicubic)
+    "float bw0(float a) { return (1.0 / 6.0) * (a * (a * (-a + 3.0) - 3.0) + 1.0); }\n" +
+    "float bw1(float a) { return (1.0 / 6.0) * (a * a * (3.0 * a - 6.0) + 4.0); }\n" +
+    "float bw2(float a) { return (1.0 / 6.0) * (a * (a * (-3.0 * a + 3.0) + 3.0) + 1.0); }\n" +
+    "float bw3(float a) { return (1.0 / 6.0) * (a * a * a); }\n" +
+    "vec4 bicubic(sampler2D t, vec2 uv, vec2 size, float lod) {\n" +
+    "  uv = uv * size + 0.5; vec2 iuv = floor(uv), f = fract(uv);\n" +
+    "  float g0x = bw0(f.x) + bw1(f.x), g1x = bw2(f.x) + bw3(f.x), g0y = bw0(f.y) + bw1(f.y), g1y = bw2(f.y) + bw3(f.y);\n" +
+    "  float h0x = -1.0 + bw1(f.x) / g0x, h1x = 1.0 + bw3(f.x) / g1x, h0y = -1.0 + bw1(f.y) / g0y, h1y = 1.0 + bw3(f.y) / g1y;\n" +
+    "  vec2 px = 1.0 / size;\n" +
+    "  return g0y * (g0x * textureLod(t, (vec2(iuv.x + h0x, iuv.y + h0y) - 0.5) * px, lod) + g1x * textureLod(t, (vec2(iuv.x + h1x, iuv.y + h0y) - 0.5) * px, lod)) +\n" +
+    "    g1y * (g0x * textureLod(t, (vec2(iuv.x + h0x, iuv.y + h1y) - 0.5) * px, lod) + g1x * textureLod(t, (vec2(iuv.x + h1x, iuv.y + h1y) - 0.5) * px, lod));\n" +
+    "}\n" +
+    "vec4 textureBicubic(sampler2D t, vec2 uv, float lod) {\n" +
+    "  vec4 a = bicubic(t, uv, vec2(textureSize(t, int(lod))), floor(lod));\n" +
+    "  vec4 b = bicubic(t, uv, vec2(textureSize(t, int(lod + 1.0))), ceil(lod));\n" +
+    "  return mix(a, b, fract(lod));\n" +
+    "}\n" +
+    // the rectangle's form factor seen through the transform minv (three.js's LTC_Evaluate)
+    "vec3 ltcEdge(vec3 a, vec3 b) { float x = dot(a, b), y = abs(x); float va = 0.8543985 + (0.4965155 + 0.0145206 * y) * y, vb = 3.4175940 + (4.1616724 + y) * y, v = va / vb;\n" +
+    "  float ts = x > 0.0 ? v : 0.5 * inversesqrt(max(1.0 - x * x, 1e-7)) - v; return cross(a, b) * ts; }\n" +
+    "float ltcEvaluate(vec3 N, vec3 V, vec3 P, mat3 minv, vec3 rc[4]) {\n" +
+    "  vec3 e1 = rc[1] - rc[0], e2 = rc[3] - rc[0];\n" +
+    "  if (dot(cross(e1, e2), P - rc[0]) < 0.0) return 0.0;\n" +
+    "  vec3 t1 = normalize(V - N * dot(V, N)), t2 = -cross(N, t1);\n" +
+    "  mat3 m = minv * transpose(mat3(t1, t2, N));\n" +
+    "  vec3 c0 = normalize(m * (rc[0] - P)), c1 = normalize(m * (rc[1] - P)), c2 = normalize(m * (rc[2] - P)), c3 = normalize(m * (rc[3] - P));\n" +
+    "  vec3 f = ltcEdge(c0, c1) + ltcEdge(c1, c2) + ltcEdge(c2, c3) + ltcEdge(c3, c0);\n" +
+    "  float l = length(f); return max((l * l + f.z) / (l + 1.0), 0.0);\n" +
+    "}\n" +
     "float sheenAlbedo(float nv, float r) { float r2 = r * r, ri = 1.0 / (r + 0.1); float a = -1.9362 + 1.0678 * r + 0.4573 * r2 - 0.8469 * ri; float b = -0.6014 + 0.5538 * r - 0.4670 * r2 - 0.1255 * ri; return clamp(exp(a * clamp(nv, 0.0, 1.0) + b), 0.0, 1.0); }\n" +
     "vec2 tuv(int i) { return (u_t[i] * vec3(v_uv0, 1.0)).xy; }\n" +
     "void main() {\n" +
@@ -168,6 +205,7 @@
     "  }\n" +
     "  float ao = has(16) ? (texture(u_aoMap, tuv(4)).r - 1.0) * u_aoIntensity + 1.0 : 1.0;\n" +
     "  vec3 color;\n" +
+    "  float transAlpha = 1.0;\n" +
     "  vec3 emissive = c1.rgb;\n" +
     "  if (u_hasEmap == 1) { vec3 e = texture(u_emap, (u_euvt * vec3(v_uv0, 1.0)).xy).rgb; emissive *= e; }\n" +
     "  if (mode == 3) {\n" +
@@ -187,7 +225,7 @@
     "    color = albedo * ao;\n" +
     "  } else {\n" +
     "    vec3 toEye = normalize(u_cam - v_world);\n" +
-    "    vec3 dif = vec3(0.0), ind = vec3(0.0), spec = vec3(0.0), pspec = vec3(0.0);\n" +
+    "    vec3 dif = vec3(0.0), ind = vec3(0.0), spec = vec3(0.0), pspec = vec3(0.0), rectDif = vec3(0.0);\n" +
     // Standard/Physical (three.js lights_physical_fragment): roughness widened by the normal's screen-space change
     "    bool physical = c5.z > 0.5;\n" +
     "    float rough = c5.x, metal = c5.y, dscale = c3.x;\n" +
@@ -205,8 +243,21 @@
     "    vec3 sheenSpec = vec3(0.0);\n" +
     "    for (int i = 0; i < " + MAX_LIGHTS + "; i++) {\n" +
     "      if (i >= u_nlights) break;\n" +
-    "      vec4 l0 = u_lights[i * 5], l1 = u_lights[i * 5 + 1], l2 = u_lights[i * 5 + 2], l3 = u_lights[i * 5 + 3], l4 = u_lights[i * 5 + 4];\n" +
+    "      vec4 l0 = u_lights[i * 7], l1 = u_lights[i * 7 + 1], l2 = u_lights[i * 7 + 2], l3 = u_lights[i * 7 + 3], l4 = u_lights[i * 7 + 4];\n" +
     "      float kind = l0.w;\n" +
+    // rect area light (Standard/Physical only): linearly transformed cosines (three.js's RE_Direct_RectArea_Physical)
+    "      if (kind > 4.5) {\n" +
+    "        if (physical) {\n" +
+    "          vec3 hw = u_lights[i * 7 + 5].xyz, hh = u_lights[i * 7 + 6].xyz, lc = l0.rgb * l1.w;\n" +
+    "          vec3 rc[4]; rc[0] = l2.xyz + hw - hh; rc[1] = l2.xyz - hw - hh; rc[2] = l2.xyz - hw + hh; rc[3] = l2.xyz + hw + hh;\n" +
+    "          vec2 luv = vec2(rough, sqrt(1.0 - nv)) * (63.0 / 64.0) + 0.5 / 64.0;\n" +
+    "          vec4 t1 = texture(u_ltc1, luv), t2 = texture(u_ltc2, luv);\n" +
+    "          mat3 minv = mat3(vec3(t1.x, 0.0, t1.y), vec3(0.0, 1.0, 0.0), vec3(t1.z, 0.0, t1.w));\n" +
+    "          pspec += lc * (f0 * t2.x + (1.0 - f0) * t2.y) * ltcEvaluate(n, toEye, v_world, minv, rc);\n" +
+    "          rectDif += lc * ltcEvaluate(n, toEye, v_world, mat3(1.0), rc);\n" +
+    "        }\n" +
+    "        continue;\n" +
+    "      }\n" +
     "      vec3 c = l0.rgb; float k = 1.0; vec3 dir = l3.xyz; bool directional = true;\n" +
     "      if (kind < 0.5) { directional = false; }\n" +
     "      else if (kind < 1.5) { c = mix(l1.rgb, l0.rgb, dot(n, l3.xyz) * 0.5 + 0.5); directional = false; }\n" +
@@ -264,7 +315,23 @@
     "      else dif += c * diffuse * (l1.w * k * 0.3183098862 * (directional ? shComp : 1.0));\n" +
     "    }\n" +
     "    if (sheenOn) ind *= 1.0 - shMax * sheenAlbedo(nv, shR);\n" +
-    "    color = albedo * (dif + ind * ao) * dscale + c2.rgb * spec + pspec + emissive + sheenSpec;\n" +
+    "    vec3 totalDiffuse = albedo * (dif + ind * ao) * dscale + albedo * dscale * rectDif;\n" +
+    // transmission: the opaque scene seen through the refracted exit point (three.js's getIBLVolumeRefraction)
+    "    if (physical && u_trans.x > 0.0) {\n" +
+    "      float ior = u_trans.z;\n" +
+    "      vec3 scale = vec3(length(u_model[0].xyz), length(u_model[1].xyz), length(u_model[2].xyz));\n" +
+    "      vec3 ray = normalize(refract(-toEye, n, 1.0 / ior)) * u_trans.y * scale;\n" +
+    "      vec4 ndc = u_proj * u_view * vec4(v_world + ray, 1.0);\n" +
+    "      vec2 rc = (ndc.xy / ndc.w + 1.0) / 2.0;\n" +
+    "      vec4 tl = textureBicubic(u_transMap, rc, log2(u_transSize.x) * rough * clamp(ior * 2.0 - 2.0, 0.0, 1.0));\n" +
+    "      vec3 tm = albedo * dscale;\n" +
+    "      if (u_trans.w > 0.0) tm *= exp(log(u_attColor) / u_trans.w * length(ray));\n" +
+    "      vec3 F = f0 * dfgV.x + dfgV.y;\n" +
+    "      float tf = (tm.r + tm.g + tm.b) / 3.0;\n" +
+    "      transAlpha = mix(1.0, 1.0 - (1.0 - tl.a) * tf, u_trans.x);\n" +
+    "      totalDiffuse = mix(totalDiffuse, (1.0 - F) * tm * tl.rgb, u_trans.x);\n" +
+    "    }\n" +
+    "    color = totalDiffuse + c2.rgb * spec + pspec + emissive + sheenSpec;\n" +
     "  }\n" +
     // MeshNormalMaterial and MeshDepthMaterial write their values as is (no colour space)
     "  bool raw = mode == 2 || mode == 3;\n" +
@@ -278,6 +345,7 @@
     "    vec3 fc = clamp(u_fog[0].yzw, 0.0, 1.0);\n" +
     "    outc = mix(outc, u_linearOut == 1 ? fc : toSrgb(fc), f);\n" +
     "  }\n" +
+    "  alpha *= transAlpha;\n" +
     "  if (u_premult == 1) outc *= alpha;\n" +
     "  o_color = vec4(outc, alpha);\n" +
     "}\n";
@@ -320,7 +388,8 @@
     var names = ["u_model", "u_view", "u_proj", "u_uvt", "u_instanced", "u_pointSize", "u_pointScale", "u_sizeAtt", "u_mat", "u_lights",
       "u_nlights", "u_fog", "u_cam", "u_map", "u_hasMap", "u_points", "u_hasNormal", "u_opaque", "u_tone", "u_exposure", "u_sprite", "u_center", "u_rotation", "u_emap", "u_hasEmap", "u_euvt", "u_dfg",
       "u_alphaMap", "u_roughMap", "u_metalMap", "u_normalMap", "u_aoMap", "u_matcap", "u_gradMap", "u_maps", "u_linearOut", "u_premult", "u_t", "u_normalScale", "u_aoIntensity",
-      "u_dispMap", "u_hasDisp", "u_dispT", "u_dispScale", "u_dispBias", "u_dashScale", "u_dashed", "u_dashSize", "u_dashTotal", "u_bumpScale", "u_bumpMap", "u_sheen"];
+      "u_dispMap", "u_hasDisp", "u_dispT", "u_dispScale", "u_dispBias", "u_dashScale", "u_dashed", "u_dashSize", "u_dashTotal", "u_bumpScale", "u_bumpMap", "u_sheen",
+      "u_trans", "u_attColor", "u_transMap", "u_transSize", "u_ltc1", "u_ltc2"];
     this.u = {};
     for (var i = 0; i < names.length; i++) this.u[names[i]] = gl.getUniformLocation(prog, names[i]);
     this.buffers = new WeakMap();   // attribute -> { buf, version }
@@ -329,7 +398,7 @@
     this.vao = gl.createVertexArray();
     this.emptyVao = gl.createVertexArray();
     this.envs = new WeakMap();      // equirect texture -> prefiltered levels
-    this.lightData = new Float32Array(MAX_LIGHTS * 20);
+    this.lightData = new Float32Array(MAX_LIGHTS * 28);
     this.mapTransforms = new Float32Array(54);
     this.textureCount = 0;
     // the DFG table for Standard/Physical lighting (renderers/dfg_table.rs)
@@ -341,6 +410,18 @@
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    // the rect area light tables (renderers/ltc_table.rs), float when float textures filter, else half float
+    var floatLinear = !!gl.getExtension("OES_texture_float_linear");
+    this.ltc = [R.RenderersLtcTable.ltc_1(), R.RenderersLtcTable.ltc_2()].map(function (data) {
+      var t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, floatLinear ? gl.RGBA32F : gl.RGBA16F, 64, 64, 0, gl.RGBA, gl.FLOAT, Float32Array.from(data));
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return t;
+    });
   }
   var B = Backend.prototype;
 
@@ -609,7 +690,7 @@
     gl.bindVertexArray(this.emptyVao);
     gl.viewport(0, 0, w, h);
     gl.disable(gl.BLEND); gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.depthMask(false);
-    gl.uniform1i(u.u_tex, 0); gl.uniform1i(u.u_lvA, 10); gl.uniform1i(u.u_lvB, 11);
+    gl.uniform1i(u.u_tex, 0); gl.uniform1i(u.u_lvA, 15); gl.uniform1i(u.u_lvB, 3);
     gl.uniform2f(u.u_vp, w, h);
     gl.uniformMatrix4fv(u.u_view, false, plan.view.elements);
     gl.uniformMatrix4fv(u.u_proj, false, plan.projection.elements);
@@ -626,8 +707,8 @@
       var mip = Math.min(Math.max(roughnessToMip(blur), -2), env.lodMax);
       var mi = Math.floor(mip), mf = mip - mi;
       var a = env.lodMax - mi, b = Math.max(0, a - 1);
-      gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, env.levels[a]);
-      gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D, env.levels[b]);
+      gl.activeTexture(gl.TEXTURE15); gl.bindTexture(gl.TEXTURE_2D, env.levels[a]);
+      gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, env.levels[b]);
       gl.uniform1f(u.u_sizeA, env.sizes[a]); gl.uniform1f(u.u_sizeB, env.sizes[b]);
       gl.uniform1f(u.u_mipF, mf);
       gl.uniform1i(u.u_mode, 3);
@@ -647,6 +728,83 @@
     }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.activeTexture(gl.TEXTURE0);
+  };
+
+
+  // the opaque scene (and background) drawn linear and untoned into a
+  // multisampled target, resolved to a mipmapped texture that transmissive
+  // materials sample (three.js's renderTransmissionPass); double-sided
+  // transmissive objects add their back faces
+  B.transmissionPass = function (scene, plan, opaque, transmissive, w, h) {
+    var gl = this.gl, u = this.u, t = this.trans;
+    if (!t || t.w !== w || t.h !== h) {
+      if (t) { gl.deleteFramebuffer(t.ms); gl.deleteFramebuffer(t.res); gl.deleteRenderbuffer(t.color); gl.deleteRenderbuffer(t.depth); gl.deleteTexture(t.tex); }
+      var half = !!gl.getExtension("EXT_color_buffer_float");
+      t = this.trans = { w: w, h: h, ms: gl.createFramebuffer(), res: gl.createFramebuffer(), color: gl.createRenderbuffer(), depth: gl.createRenderbuffer(), tex: gl.createTexture() };
+      var samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES));
+      gl.bindRenderbuffer(gl.RENDERBUFFER, t.color);
+      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, half ? gl.RGBA16F : gl.RGBA8, w, h);
+      gl.bindRenderbuffer(gl.RENDERBUFFER, t.depth);
+      gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, gl.DEPTH_COMPONENT24, w, h);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.ms);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, t.color);
+      gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, t.depth);
+      gl.bindTexture(gl.TEXTURE_2D, t.tex);
+      var levels = Math.floor(Math.log2(Math.max(w, h))) + 1;
+      gl.texStorage2D(gl.TEXTURE_2D, levels, half ? gl.RGBA16F : gl.RGBA8, w, h);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.res);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t.tex, 0);
+    }
+    var resolve = function () {
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, t.ms);
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, t.res);
+      gl.blitFramebuffer(0, 0, w, h, 0, 0, w, h, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.ms);
+      gl.activeTexture(gl.TEXTURE14);
+      gl.bindTexture(gl.TEXTURE_2D, t.tex);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.activeTexture(gl.TEXTURE0);
+    };
+    gl.bindFramebuffer(gl.FRAMEBUFFER, t.ms);
+    gl.viewport(0, 0, w, h);
+    // the clear colour in linear; a see-through clear becomes white at half alpha
+    var cl = plan.clear, ca = plan.clear_alpha;
+    if (ca < 1) gl.clearColor(1, 1, 1, 0.5); else gl.clearColor(cl.r, cl.g, cl.b, ca);
+    gl.colorMask(true, true, true, true);
+    gl.depthMask(true);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    var tone = this.tone, info = { triangles: 0, lines: 0, points: 0, calls: 0 };
+    this.tone = 0;
+    this.background(scene, plan, true, w, h);
+    gl.depthMask(true);
+    gl.useProgram(this.prog);
+    gl.bindVertexArray(this.vao);
+    gl.uniform1i(u.u_linearOut, 1);
+    for (var i = 0; i < opaque.length; i++) this.draw(opaque[i], info, null);
+    resolve();
+    var back = false;
+    for (var j = 0; j < transmissive.length; j++) {
+      var m = transmissive[j].object.material;
+      if (m.side !== 2) continue;
+      if (!back) { this.transTex = t.tex; back = true; }
+      this.drawSide = 1;
+      this.draw(transmissive[j], info, null);
+      this.drawSide = null;
+    }
+    if (back) resolve();
+    this.tone = tone;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, w, h);
+    gl.uniform1i(u.u_linearOut, this.linearOut ? 1 : 0);
+    this.transTex = t.tex;
+    gl.activeTexture(gl.TEXTURE14);
+    gl.bindTexture(gl.TEXTURE_2D, t.tex);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform2f(u.u_transSize, w, h);
   };
 
   B.render = function (scene, camera) {
@@ -673,7 +831,7 @@
     gl.uniform3f(u.u_cam, plan.camera_position.x, plan.camera_position.y, plan.camera_position.z);
     var n = Math.min(MAX_LIGHTS, plan.light_count);
     this.lightData.fill(0);
-    for (var i = 0; i < n * 20; i++) this.lightData[i] = plan.lights[i];
+    for (var i = 0; i < n * 28; i++) this.lightData[i] = plan.lights[i];
     gl.uniform4fv(u.u_lights, this.lightData);
     gl.uniform1i(u.u_nlights, n);
     gl.uniform4fv(u.u_fog, plan.fog);
@@ -687,10 +845,29 @@
     gl.activeTexture(gl.TEXTURE0);
     for (var mi = 0; mi < MAPS.length; mi++) gl.uniform1i(u[MAPS[mi].uniform], MAPS[mi].unit);
     gl.uniform1i(u.u_dispMap, 12);
+    gl.uniform1i(u.u_ltc1, 10);
+    gl.uniform1i(u.u_ltc2, 11);
+    gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, this.ltc[0]);
+    gl.activeTexture(gl.TEXTURE11); gl.bindTexture(gl.TEXTURE_2D, this.ltc[1]);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(u.u_transMap, 14);
     gl.uniform1i(u.u_linearOut, linearOut ? 1 : 0);
+    this.linearOut = linearOut;
     var info = { triangles: 0, lines: 0, points: 0, calls: 0 };
     var override = scene.overrideMaterial || null;
-    for (var k = 0; k < plan.items.length; k++) this.draw(plan.items[k], info, override);
+    // three.js's three lists: opaque, transmissive (back to front), transparent
+    var opaque = [], transmissive = [], transparent = [];
+    for (var k = 0; k < plan.items.length; k++) {
+      var it = plan.items[k], m = it.object.material;
+      if (m && !Array.isArray(m) && m.transmission > 0) transmissive.push(it);
+      else if (it.transparent) transparent.push(it);
+      else opaque.push(it);
+    }
+    transmissive.sort(function (a, b) { return a.depth - b.depth; });
+    this.transTex = null;
+    if (transmissive.length && !override) this.transmissionPass(scene, plan, opaque, transmissive, w, h);
+    var lists = [opaque, transmissive, transparent];
+    for (var li = 0; li < 3; li++) for (var k2 = 0; k2 < lists[li].length; k2++) this.draw(lists[li][k2], info, override);
     gl.disable(gl.POLYGON_OFFSET_FILL);
     gl.colorMask(true, true, true, true);
     gl.bindVertexArray(null);
@@ -791,6 +968,12 @@
     var sheen = material.sheen || 0, shc = material.sheenColor;
     if (sheen > 0 && shc) gl.uniform4f(u.u_sheen, shc.r * sheen, shc.g * sheen, shc.b * sheen, Math.min(1, Math.max(0.0001, material.sheenRoughness == null ? 1 : material.sheenRoughness)));
     else gl.uniform4f(u.u_sheen, 0, 0, 0, 0);
+    var tr = this.transTex ? material.transmission || 0 : 0;
+    if (tr > 0) {
+      var ad = material.attenuationDistance, ac = material.attenuationColor;
+      gl.uniform4f(u.u_trans, tr, material.thickness || 0, material.ior == null ? 1.5 : material.ior, isFinite(ad) && ad > 0 ? ad : 0);
+      gl.uniform3f(u.u_attColor, ac ? ac.r : 1, ac ? ac.g : 1, ac ? ac.b : 1);
+    } else gl.uniform4f(u.u_trans, 0, 0, 0, 0);
     var instances = 0;
     if (kind === 2 && o.instanceMatrix) {
       var im = o.instanceMatrix;
@@ -879,7 +1062,7 @@
     else if (kind === 5) mode = gl.LINE_LOOP;
     else if (kind === 6) mode = gl.POINTS;
     // side; a transparent double-sided mesh is drawn back faces first, then front (three.js's two passes)
-    var side = mu[16], passes = [side];
+    var side = this.drawSide != null ? this.drawSide : mu[16], passes = [side];
     if (mesh && side === 2 && material.transparent === true && material.forceSinglePass !== true) passes = [1, 0];
     for (var p = 0; p < passes.length; p++) {
       if (!mesh || passes[p] === 2) gl.disable(gl.CULL_FACE);

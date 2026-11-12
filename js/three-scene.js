@@ -421,6 +421,8 @@
   geo("TorusGeometry", [1, 0.4, 12, 48, 2 * PI, 0, 2 * PI], GP.torus_geometry);
   geo("TorusKnotGeometry", [1, 0.4, 64, 8, 2, 3], GP.torus_knot_geometry);
   geo("CapsuleGeometry", [1, 1, 4, 8, 1], GP.capsule_geometry);
+  // the TeapotGeometry addon (three/addons/geometries/TeapotGeometry.js)
+  geo("TeapotGeometry", [50, 10, true, true, true, true, true], R.GeometriesTeapot.teapot_geometry);
   geo("TetrahedronGeometry", [1, 0], GH.tetrahedron_geometry);
   geo("OctahedronGeometry", [1, 0], GH.octahedron_geometry);
   geo("IcosahedronGeometry", [1, 0], GH.icosahedron_geometry);

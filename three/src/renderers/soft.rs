@@ -24,7 +24,8 @@ const RECIPROCAL_PI: f64 = 0.3183098861837907;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LightIn {
-    /// 0 ambient, 1 hemisphere, 2 directional, 3 point, 4 spot
+    /// 0 ambient, 1 hemisphere, 2 directional, 3 point, 4 spot, 5 rect area
+    /// (GPU only: half_width and half_height are its world-space half extents)
     pub kind: i64,
     pub color: Color,
     pub ground: Color,
@@ -35,6 +36,8 @@ pub struct LightIn {
     pub decay: f64,
     pub cos_outer: f64,
     pub cos_inner: f64,
+    pub half_width: Vector3,
+    pub half_height: Vector3,
 }
 
 /// What shading needs from a material.
@@ -356,6 +359,9 @@ fn shade_parts(s: &Surface, albedo: &Color, n: &Vector3, at: &Vector3, frame: &F
     let mut pg = 0.0;
     let mut pb = 0.0;
     for l in frame.lights.iter() {
+        if l.kind == 5 {
+            continue;
+        }
         let mut c = l.color;
         let mut k = 1.0;
         let mut dir = l.direction;
@@ -444,6 +450,7 @@ pub fn collect_lights(objects: &Vec<ObjectRef>) -> Vec<LightIn> {
             ObjectKind::DirectionalLight(_) => 2,
             ObjectKind::PointLight(_) => 3,
             ObjectKind::SpotLight(_) => 4,
+            ObjectKind::RectAreaLight(_) => 5,
             _ => -1,
         };
         if kind < 0 {
@@ -471,6 +478,13 @@ pub fn collect_lights(objects: &Vec<ObjectRef>) -> Vec<LightIn> {
             direction.sub(&target);
         }
         direction.normalize();
+        // a rect area light's half extents: its local x and y turned as the light is
+        let mut rotation = Matrix4::identity();
+        rotation.extract_rotation(&ob.matrix_world);
+        let mut half_width = Vector3::new(l.width * 0.5, 0.0, 0.0);
+        let mut half_height = Vector3::new(0.0, l.height * 0.5, 0.0);
+        half_width.apply_matrix4(&rotation);
+        half_height.apply_matrix4(&rotation);
         out.push(LightIn {
             kind,
             color: l.color,
@@ -482,6 +496,8 @@ pub fn collect_lights(objects: &Vec<ObjectRef>) -> Vec<LightIn> {
             decay: l.decay,
             cos_outer: l.angle.cos(),
             cos_inner: (l.angle * (1.0 - l.penumbra)).cos(),
+            half_width,
+            half_height,
         });
     }
     out
