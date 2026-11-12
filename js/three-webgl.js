@@ -135,7 +135,9 @@
     "uniform int u_hasEmap;\n" +
     // extra maps: bit 1 alpha, 2 roughness, 4 metalness, 8 normal, 16 ao, 32 matcap, 64 gradient; u_t: their uv transforms
     "uniform sampler2D u_alphaMap, u_roughMap, u_metalMap, u_normalMap, u_aoMap, u_matcap, u_gradMap;\n" +
-    "uniform int u_maps, u_linearOut, u_premult;\n" +
+    "uniform int u_maps;\n" +
+    "uniform int u_linearOut;\n" +
+    "uniform int u_premult;\n" +
     "uniform mat3 u_t[6];\n" +
     "uniform vec2 u_normalScale;\n" +
     "uniform float u_aoIntensity;\n" +
@@ -167,7 +169,11 @@
     "uniform mat4 u_view;\n" +
     "uniform mat3 u_uvt;\n" +
     "uniform sampler2D u_map;\n" +
-    "uniform int u_hasMap, u_points, u_hasNormal, u_opaque, u_tone;\n" +
+    "uniform int u_hasMap;\n" +
+    "uniform int u_points;\n" +
+    "uniform int u_hasNormal;\n" +
+    "uniform int u_opaque;\n" +
+    "uniform int u_tone;\n" +
     "uniform float u_exposure;\n" +
     "out vec4 o_color;\n" +
     COMMON + CUBE_UV +
@@ -276,7 +282,7 @@
     "void main() {\n" +
     "  if (u_dashed == 1 && mod(v_lineDist, u_dashTotal) > u_dashSize) discard;\n" +
     "  vec4 c0 = u_mat[0], c1 = u_mat[1], c2 = u_mat[2], c3 = u_mat[3], c4 = u_mat[4], c5 = u_mat[5];\n" +
-    "  int mode = int(c3.w + 0.5);\n" +
+    "  const int mode = K_MODE;\n" +
     "  vec3 albedo = c0.rgb * v_color;\n" +
     "  float alpha = c0.a;\n" +
     "  if (u_hasMap == 1) {\n" +
@@ -288,8 +294,12 @@
     "  if (has(1)) alpha *= texture(u_alphaMap, tuv(0)).g;\n" +
     "  if (alpha < c1.a) discard;\n" +
     "  if (u_opaque == 1) alpha = 1.0;\n" +
+    // a shadow caster: depth only, after the same discards
+    "#if K_SHPASS == 1\n" +
+    "  o_color = vec4(albedo, alpha); return;\n" +
+    "#endif\n" +
     "  vec3 n;\n" +
-    "  if (c4.y > 0.5 || u_hasNormal == 0) n = normalize(cross(dFdx(v_world), dFdy(v_world)));\n" +
+    "  if (K_FLAT == 1 || u_hasNormal == 0) n = normalize(cross(dFdx(v_world), dFdy(v_world)));\n" +
     "  else { n = normalize(v_normal); if (!gl_FrontFacing) n = -n; }\n" +
     "  vec3 n0 = n;\n" +
     "  vec3 shN = u_hasNormal == 1 ? normalize(v_normal) : vec3(0.0, 0.0, 1.0);\n" +
@@ -341,13 +351,13 @@
     "    vec3 mx = normalize(vec3(vd.z, 0.0, -vd.x)); vec3 my = cross(vd, mx);\n" +
     "    vec2 muv = vec2(dot(mx, vn), dot(my, vn)) * 0.495 + 0.5;\n" +
     "    color = albedo * (has(32) ? texture(u_matcap, muv).rgb : vec3(mix(0.2, 0.8, muv.y)));\n" +
-    "  } else if (c3.y < 0.5) {\n" +
+    "  } else if (K_LIT == 0) {\n" +
     "    color = albedo * ao;\n" +
     "  } else {\n" +
     "    vec3 toEye = normalize(u_cam - v_world);\n" +
     "    vec3 dif = vec3(0.0), ind = vec3(0.0), spec = vec3(0.0), pspec = vec3(0.0), rectDif = vec3(0.0);\n" +
     // Standard/Physical (three.js lights_physical_fragment): roughness widened by the normal's screen-space change
-    "    bool physical = c5.z > 0.5;\n" +
+    "    const bool physical = K_PHYS == 1;\n" +
     "    float rough = c5.x, metal = c5.y, dscale = c3.x;\n" +
     "    if (has(2)) rough *= texture(u_roughMap, tuv(1)).g;\n" +
     "    if (has(4)) metal *= texture(u_metalMap, tuv(2)).b;\n" +
@@ -358,15 +368,76 @@
     "    float nv = clamp(dot(n, toEye), 0.0, 1.0);\n" +
     "    vec2 dfgV = texture(u_dfg, vec2(rough, nv)).rg;\n" +
     // sheen (Charlie distribution, Neubelt visibility) and its energy loss on the rest
-    "    bool sheenOn = physical && u_sheen.a > 0.0;\n" +
+    "    const bool sheenOn = K_SHEEN == 1;\n" +
     "    float shR = max(u_sheen.a, 0.0001), shMax = max(u_sheen.r, max(u_sheen.g, u_sheen.b));\n" +
     "    vec3 sheenSpec = vec3(0.0);\n" +
-    "    for (int i = 0; i < " + MAX_LIGHTS + "; i++) {\n" +
-    "      if (i >= u_nlights) break;\n" +
-    "      vec4 l0 = u_lights[i * 7], l1 = u_lights[i * 7 + 1], l2 = u_lights[i * 7 + 2], l3 = u_lights[i * 7 + 3], l4 = u_lights[i * 7 + 4];\n" +
-    "      float kind = l0.w;\n" +
+    "//@LIGHTS\n" +
+    "    if (sheenOn) ind *= 1.0 - shMax * sheenAlbedo(nv, shR);\n" +
+    "    vec3 totalDiffuse = albedo * (dif + ind * ao) * dscale + albedo * dscale * rectDif;\n" +
+    // image-based light from the prefiltered environment (three.js's getIBLIrradiance/Radiance, RE_IndirectSpecular_Physical)
+    "    vec3 envSpec = vec3(0.0);\n" +
+    "    if (physical && K_ENV == 1) {\n" +
+    "      vec3 irr = 3.141592653589793 * envCubeUV(u_envRot * n, 1.0) * u_env.y;\n" +
+    "      vec3 rv = reflect(-toEye, n); float r2 = rough * rough; rv = normalize(mix(rv, n, r2 * r2));\n" +
+    "      vec3 rad = envCubeUV(u_envRot * rv, rough) * u_env.y;\n" +
+    "      float ess = dfgV.x + dfgV.y, ems = 1.0 - ess;\n" +
+    "      vec3 fssD = vec3(0.04) * dfgV.x + dfgV.y, fssM = albedo * dfgV.x + dfgV.y;\n" +
+    "      vec3 favgD = vec3(0.04 + 0.96 * 0.047619), favgM = albedo + (1.0 - albedo) * 0.047619;\n" +
+    "      vec3 msD = fssD * favgD / (1.0 - ems * favgD) * ems, msM = fssM * favgM / (1.0 - ems * favgM) * ems;\n" +
+    "      vec3 cwi = irr * 0.3183098862;\n" +
+    "      vec3 ed = albedo * (1.0 - metal) * (1.0 - (fssD + msD)) * cwi;\n" +
+    "      envSpec = rad * mix(fssD, fssM, metal) + mix(msD, msM, metal) * cwi;\n" +
+    "      if (sheenOn) { float sc = 1.0 - shMax * sheenAlbedo(nv, shR); ed *= sc; envSpec *= sc; }\n" +
+    "      if (has(16)) envSpec *= clamp(pow(nv + ao, exp2(-16.0 * rough - 1.0)) - 1.0 + ao, 0.0, 1.0);\n" +
+    "      totalDiffuse += ed * ao;\n" +
+    "    }\n" +
+    // transmission: the opaque scene seen through the refracted exit point (three.js's getIBLVolumeRefraction)
+    "    if (K_TRANS == 1) {\n" +
+    "      float ior = u_trans.z;\n" +
+    "      vec3 scale = vec3(length(u_model[0].xyz), length(u_model[1].xyz), length(u_model[2].xyz));\n" +
+    "      vec3 ray = normalize(refract(-toEye, n, 1.0 / ior)) * u_trans.y * scale;\n" +
+    "      vec4 ndc = u_proj * u_view * vec4(v_world + ray, 1.0);\n" +
+    "      vec2 rc = (ndc.xy / ndc.w + 1.0) / 2.0;\n" +
+    "      vec4 tl = textureBicubic(u_transMap, rc, log2(u_transSize.x) * rough * clamp(ior * 2.0 - 2.0, 0.0, 1.0));\n" +
+    "      vec3 tm = albedo * dscale;\n" +
+    "      if (u_trans.w > 0.0) tm *= exp(log(u_attColor) / u_trans.w * length(ray));\n" +
+    "      vec3 F = f0 * dfgV.x + dfgV.y;\n" +
+    "      float tf = (tm.r + tm.g + tm.b) / 3.0;\n" +
+    "      transAlpha = mix(1.0, 1.0 - (1.0 - tl.a) * tf, u_trans.x);\n" +
+    "      totalDiffuse = mix(totalDiffuse, (1.0 - F) * tm * tl.rgb, u_trans.x);\n" +
+    "    }\n" +
+    "    color = totalDiffuse + c2.rgb * spec + pspec + emissive + sheenSpec + envSpec;\n" +
+    "  }\n" +
+    // Basic, Lambert and Phong: the environment reflected (or refracted) and combined (three.js's envmap_fragment)
+    "  if (K_ENV == 2 && mode == 0 && K_PHYS == 0) {\n" +
+    "    vec3 ctf = u_proj[3][3] > 0.5 ? normalize(vec3(-u_view[0][2], -u_view[1][2], -u_view[2][2])) : normalize(v_world - u_cam);\n" +
+    "    vec3 rv = u_envUV.w > 0.0 ? refract(ctf, n, u_envUV.w) : reflect(ctf, n);\n" +
+    "    vec3 ec = envEquirect(u_envRot * rv);\n" +
+    "    float st = u_env.w;\n" +
+    "    if (u_env.z < 0.5) color = mix(color, color * ec, st); else if (u_env.z < 1.5) color = mix(color, ec, st); else color += ec * st;\n" +
+    "  }\n" +
+    // MeshNormalMaterial and MeshDepthMaterial write their values as is (no colour space)
+    "  bool raw = mode == 2 || mode == 3;\n" +
+    "  if (!raw && u_tone > 0) color = toneMap(color);\n" +
+    "  vec3 outc = max(color, 0.0);\n" +
+    "  if (!raw && u_linearOut == 0) outc = toSrgb(outc);\n" +
+    // three.js fogs after the colour-space conversion, with the fog colour in sRGB; linear fog is a smoothstep
+    "  if (K_FOG > 0) {\n" +
+    "    float f = K_FOG == 1 ? smoothstep(u_fog[1].x, u_fog[1].y, v_depth)\n" +
+    "      : 1.0 - exp(-u_fog[1].z * u_fog[1].z * v_depth * v_depth);\n" +
+    "    vec3 fc = clamp(u_fog[0].yzw, 0.0, 1.0);\n" +
+    "    outc = mix(outc, u_linearOut == 1 ? fc : toSrgb(fc), f);\n" +
+    "  }\n" +
+    "  alpha *= transAlpha;\n" +
+    "  if (u_premult == 1) outc *= alpha;\n" +
+    "  o_color = vec4(outc, alpha);\n" +
+    "}\n";
+
+  // one light of a known kind (the loops are written per kind into each variant, so the
+  // kind tests fold away): l0..l4 and `kind` are set by the loop
+  var LIGHT_BODY = "" +
     // rect area light (Standard/Physical only): linearly transformed cosines (three.js's RE_Direct_RectArea_Physical)
-    "      if (kind > 4.5) {\n" +
+    "      if (K_RECT == 1 && kind > 4.5) {\n" +
     "        if (physical) {\n" +
     "          vec3 hw = u_lights[i * 7 + 5].xyz, hh = u_lights[i * 7 + 6].xyz, lc = l0.rgb * l1.w;\n" +
     "          vec3 rc[4]; rc[0] = l2.xyz + hw - hh; rc[1] = l2.xyz - hw - hh; rc[2] = l2.xyz - hw + hh; rc[3] = l2.xyz + hw + hh;\n" +
@@ -426,7 +497,7 @@
     "          vec3 favg = f0 + (1.0 - f0) * 0.047619;\n" +
     "          vec3 fms = fssV * fssL * favg / (1.0 - emsV * emsL * favg + 1e-6);\n" +
     "          pspec += c * (l1.w * k * nlc * shComp) * (F * (V * D) + fms * emsV * emsL);\n" +
-    "        } else if (c3.z > 0.5 && nl > 0.0) {\n" +
+    "        } else if (K_PHONG == 1 && nl > 0.0) {\n" +
     "          vec3 h = normalize(dir + toEye);\n" +
     "          float s = pow(max(dot(n, h), 0.0), c2.w) * (c2.w + 2.0) / 8.0 * 0.3183098862;\n" +
     "          spec += c * (l1.w * k * s * nl);\n" +
@@ -434,67 +505,7 @@
     "      }\n" +
     "      if (kind < 1.5) ind += c * (l1.w * 0.3183098862);\n" +
     "      else dif += c * diffuse * (l1.w * k * 0.3183098862 * (directional ? shComp : 1.0));\n" +
-    "    }\n" +
-    "    if (sheenOn) ind *= 1.0 - shMax * sheenAlbedo(nv, shR);\n" +
-    "    vec3 totalDiffuse = albedo * (dif + ind * ao) * dscale + albedo * dscale * rectDif;\n" +
-    // image-based light from the prefiltered environment (three.js's getIBLIrradiance/Radiance, RE_IndirectSpecular_Physical)
-    "    vec3 envSpec = vec3(0.0);\n" +
-    "    if (physical && u_env.x > 0.5 && u_env.x < 1.5) {\n" +
-    "      vec3 irr = 3.141592653589793 * envCubeUV(u_envRot * n, 1.0) * u_env.y;\n" +
-    "      vec3 rv = reflect(-toEye, n); float r2 = rough * rough; rv = normalize(mix(rv, n, r2 * r2));\n" +
-    "      vec3 rad = envCubeUV(u_envRot * rv, rough) * u_env.y;\n" +
-    "      float ess = dfgV.x + dfgV.y, ems = 1.0 - ess;\n" +
-    "      vec3 fssD = vec3(0.04) * dfgV.x + dfgV.y, fssM = albedo * dfgV.x + dfgV.y;\n" +
-    "      vec3 favgD = vec3(0.04 + 0.96 * 0.047619), favgM = albedo + (1.0 - albedo) * 0.047619;\n" +
-    "      vec3 msD = fssD * favgD / (1.0 - ems * favgD) * ems, msM = fssM * favgM / (1.0 - ems * favgM) * ems;\n" +
-    "      vec3 cwi = irr * 0.3183098862;\n" +
-    "      vec3 ed = albedo * (1.0 - metal) * (1.0 - (fssD + msD)) * cwi;\n" +
-    "      envSpec = rad * mix(fssD, fssM, metal) + mix(msD, msM, metal) * cwi;\n" +
-    "      if (sheenOn) { float sc = 1.0 - shMax * sheenAlbedo(nv, shR); ed *= sc; envSpec *= sc; }\n" +
-    "      if (has(16)) envSpec *= clamp(pow(nv + ao, exp2(-16.0 * rough - 1.0)) - 1.0 + ao, 0.0, 1.0);\n" +
-    "      totalDiffuse += ed * ao;\n" +
-    "    }\n" +
-    // transmission: the opaque scene seen through the refracted exit point (three.js's getIBLVolumeRefraction)
-    "    if (physical && u_trans.x > 0.0) {\n" +
-    "      float ior = u_trans.z;\n" +
-    "      vec3 scale = vec3(length(u_model[0].xyz), length(u_model[1].xyz), length(u_model[2].xyz));\n" +
-    "      vec3 ray = normalize(refract(-toEye, n, 1.0 / ior)) * u_trans.y * scale;\n" +
-    "      vec4 ndc = u_proj * u_view * vec4(v_world + ray, 1.0);\n" +
-    "      vec2 rc = (ndc.xy / ndc.w + 1.0) / 2.0;\n" +
-    "      vec4 tl = textureBicubic(u_transMap, rc, log2(u_transSize.x) * rough * clamp(ior * 2.0 - 2.0, 0.0, 1.0));\n" +
-    "      vec3 tm = albedo * dscale;\n" +
-    "      if (u_trans.w > 0.0) tm *= exp(log(u_attColor) / u_trans.w * length(ray));\n" +
-    "      vec3 F = f0 * dfgV.x + dfgV.y;\n" +
-    "      float tf = (tm.r + tm.g + tm.b) / 3.0;\n" +
-    "      transAlpha = mix(1.0, 1.0 - (1.0 - tl.a) * tf, u_trans.x);\n" +
-    "      totalDiffuse = mix(totalDiffuse, (1.0 - F) * tm * tl.rgb, u_trans.x);\n" +
-    "    }\n" +
-    "    color = totalDiffuse + c2.rgb * spec + pspec + emissive + sheenSpec + envSpec;\n" +
-    "  }\n" +
-    // Basic, Lambert and Phong: the environment reflected (or refracted) and combined (three.js's envmap_fragment)
-    "  if (u_env.x > 1.5 && mode == 0 && c5.z < 0.5) {\n" +
-    "    vec3 ctf = u_proj[3][3] > 0.5 ? normalize(vec3(-u_view[0][2], -u_view[1][2], -u_view[2][2])) : normalize(v_world - u_cam);\n" +
-    "    vec3 rv = u_envUV.w > 0.0 ? refract(ctf, n, u_envUV.w) : reflect(ctf, n);\n" +
-    "    vec3 ec = envEquirect(u_envRot * rv);\n" +
-    "    float st = u_env.w;\n" +
-    "    if (u_env.z < 0.5) color = mix(color, color * ec, st); else if (u_env.z < 1.5) color = mix(color, ec, st); else color += ec * st;\n" +
-    "  }\n" +
-    // MeshNormalMaterial and MeshDepthMaterial write their values as is (no colour space)
-    "  bool raw = mode == 2 || mode == 3;\n" +
-    "  if (!raw && u_tone > 0) color = toneMap(color);\n" +
-    "  vec3 outc = max(color, 0.0);\n" +
-    "  if (!raw && u_linearOut == 0) outc = toSrgb(outc);\n" +
-    // three.js fogs after the colour-space conversion, with the fog colour in sRGB; linear fog is a smoothstep
-    "  if (c4.w > 0.5 && u_fog[0].x > 0.5) {\n" +
-    "    float f = u_fog[0].x < 1.5 ? smoothstep(u_fog[1].x, u_fog[1].y, v_depth)\n" +
-    "      : 1.0 - exp(-u_fog[1].z * u_fog[1].z * v_depth * v_depth);\n" +
-    "    vec3 fc = clamp(u_fog[0].yzw, 0.0, 1.0);\n" +
-    "    outc = mix(outc, u_linearOut == 1 ? fc : toSrgb(fc), f);\n" +
-    "  }\n" +
-    "  alpha *= transAlpha;\n" +
-    "  if (u_premult == 1) outc *= alpha;\n" +
-    "  o_color = vec4(outc, alpha);\n" +
-    "}\n";
+    "";
 
   // the extra material maps: property, sampler, texture unit, bit in u_maps, slot in u_t (-1 none)
   var MAPS = [
@@ -534,7 +545,9 @@
     this.gl = gl;
     this.renderer = renderer;
     this.mains = {};
-    this.useMain(1);
+    this.frame = {};
+    this.fver = 0;
+    this.cur = null;
     this.buffers = new WeakMap();   // attribute -> { buf, version }
     this.wire = new WeakMap();      // geometry -> { buf, count, key }
     this.textures = new WeakMap();  // texture -> { tex, version }
@@ -572,13 +585,71 @@
   }
   var B = Backend.prototype;
 
-  // the main program for a shadow type (1 PCF, also without shadows; 2 basic; 3 VSM), compiled on first use
-  B.useMain = function (type) {
-    var m = this.mains[type];
-    if (!m) m = this.mains[type] = program(this.gl, VS, "#version 300 es\n#define SHADOW_TYPE " + type + "\n" + FS_BODY, NAMES);
+  // The main program is compiled per variant: the features a draw uses
+  // (SPEC uniforms and the K_ flags) become constants, so the shader holds
+  // only the branches that draw takes. `key` lists the values in SPEC_KEYS
+  // order after the shadow type (1 PCF, also without shadows; 2 basic; 3 VSM).
+  var SPEC = ["u_hasMap", "u_points", "u_hasNormal", "u_opaque", "u_tone", "u_maps", "u_linearOut", "u_premult", "u_hasEmap", "u_dashed", "u_receive"];
+  var K_FLAGS = ["K_MODE", "K_LIT", "K_PHONG", "K_PHYS", "K_FLAT", "K_SHEEN", "K_TRANS", "K_RECT", "K_FOG", "K_SHPASS", "K_ENV",
+    // lights per kind (ambient, hemisphere, directional, point, spot, rect area), packed in that order
+    "K_NAMB", "K_NHEMI", "K_NDIR", "K_NPOINT", "K_NSPOT", "K_NRECT"];
+  var SPEC_KEYS = SPEC.concat(K_FLAGS);
+  function fragmentSource(type, vals) {
+    var head = "#version 300 es\n#define SHADOW_TYPE " + type + "\n";
+    for (var i = 0; i < SPEC_KEYS.length; i++) head += "#define " + SPEC_KEYS[i] + " " + vals[i] + "\n";
+    var body = FS_BODY.replace(/^uniform int (u_\w+);\n/gm, function (line, name) { return SPEC.indexOf(name) >= 0 ? "" : line; });
+    // one loop per light kind the frame has, with the kind a constant
+    var loops = "", first = 0, at = SPEC_KEYS.indexOf("K_NAMB");
+    for (var kind = 0; kind < 6; kind++) {
+      var count = vals[at + kind];
+      if (!count) continue;
+      loops += "    for (int i = " + first + "; i < " + (first + count) + "; i++) {\n" +
+        "      vec4 l0 = u_lights[i * 7], l1 = u_lights[i * 7 + 1], l2 = u_lights[i * 7 + 2], l3 = u_lights[i * 7 + 3], l4 = u_lights[i * 7 + 4];\n" +
+        "      const float kind = " + kind + ".0;\n" + LIGHT_BODY + "    }\n";
+      first += count;
+    }
+    return head + body.replace("//@LIGHTS\n", loops);
+  }
+  B.useMain = function (type, vals) {
+    if (!vals) { vals = []; for (var i = 0; i < SPEC_KEYS.length; i++) vals.push(0); }
+    var key = type + ":" + vals.join(","), m = this.mains[key], gl = this.gl;
+    if (!m) {
+      m = this.mains[key] = program(gl, VS, fragmentSource(type, vals), NAMES);
+      m.seen = 0;
+      this.programCount = (this.programCount || 0) + 1;
+      gl.useProgram(m.prog);
+      this.setUnits(m.u);
+      this.cur = null;
+    }
+    if (this.cur !== m) { gl.useProgram(m.prog); this.cur = m; }
     this.prog = m.prog;
     this.u = m.u;
+    // the frame's uniforms this program has not seen yet
+    if (m.seen < this.fver) {
+      for (var name in this.frame) {
+        var e = this.frame[name];
+        if (e.ver > m.seen) setUniform(gl, m.u[name], e.kind, e.v);
+      }
+      m.seen = this.fver;
+    }
   };
+
+  // a uniform every variant shares for the whole frame (or pass): recorded,
+  // and set on each program when it is next used
+  B.frameUniform = function (name, kind, v) {
+    if (kind !== "i" && kind !== "f") v = Float32Array.from(v);
+    this.frame[name] = { kind: kind, v: v, ver: ++this.fver };
+    if (this.cur) { setUniform(this.gl, this.cur.u[name], kind, v); this.cur.seen = this.fver; }
+  };
+  function setUniform(gl, loc, kind, v) {
+    if (loc == null) return;
+    if (kind === "m4") gl.uniformMatrix4fv(loc, false, v);
+    else if (kind === "v4") gl.uniform4fv(loc, v);
+    else if (kind === "v3") gl.uniform3fv(loc, v);
+    else if (kind === "v2") gl.uniform2fv(loc, v);
+    else if (kind === "i") gl.uniform1i(loc, v);
+    else gl.uniform1f(loc, v);
+  }
 
   // a GPU buffer holding `attr`, re-uploaded when its version changes
   B.buffer = function (attr, target) {
@@ -905,6 +976,7 @@
     }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.activeTexture(gl.TEXTURE0);
+    this.cur = null;
   };
 
 
@@ -913,7 +985,7 @@
   // materials sample (three.js's renderTransmissionPass); double-sided
   // transmissive objects add their back faces
   B.transmissionPass = function (scene, plan, opaque, transmissive, w, h) {
-    var gl = this.gl, u = this.u, t = this.trans;
+    var gl = this.gl, t = this.trans;
     if (!t || t.w !== w || t.h !== h) {
       if (t) { gl.deleteFramebuffer(t.ms); gl.deleteFramebuffer(t.res); gl.deleteRenderbuffer(t.color); gl.deleteRenderbuffer(t.depth); gl.deleteTexture(t.tex); }
       var half = !!gl.getExtension("EXT_color_buffer_float");
@@ -958,9 +1030,9 @@
     this.tone = 0;
     this.background(scene, plan, true, w, h);
     gl.depthMask(true);
-    gl.useProgram(this.prog);
+    this.cur = null;
     gl.bindVertexArray(this.vao);
-    gl.uniform1i(u.u_linearOut, 1);
+    this.outLinear = 1;
     for (var i = 0; i < opaque.length; i++) this.draw(opaque[i], info, null);
     resolve();
     var back = false;
@@ -976,12 +1048,12 @@
     this.tone = tone;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, w, h);
-    gl.uniform1i(u.u_linearOut, this.linearOut ? 1 : 0);
+    this.outLinear = this.linearOut ? 1 : 0;
     this.transTex = t.tex;
     gl.activeTexture(gl.TEXTURE14);
     gl.bindTexture(gl.TEXTURE_2D, t.tex);
     gl.activeTexture(gl.TEXTURE0);
-    gl.uniform2f(u.u_transSize, w, h);
+    this.frameUniform("u_transSize", "v2", [w, h]);
   };
 
   // a depth texture for a shadow map: 2D or cube, compared (PCF, basic) or plain (VSM)
@@ -1039,7 +1111,7 @@
   // three.js draws them), point lights into six cube faces, VSM blurred.
   // Returns the slot of each light index (2D slots 0-2, the point light 3).
   B.renderShadows = function (scene, plan, type) {
-    var gl = this.gl, u = this.u, slots = {};
+    var gl = this.gl, slots = {};
     var plans = R.RenderersPlan.shadow_plans(scene);
     if (!plans.length) return slots;
     var casters = [];
@@ -1051,9 +1123,9 @@
     this.shadowData = this.shadowData || { mat: new Float32Array(64), param: new Float32Array(16), size: new Float32Array(16) };
     var next2d = 0, usedPoint = false, half = !!gl.getExtension("EXT_color_buffer_float");
     var info = { triangles: 0, lines: 0, points: 0, calls: 0 };
-    gl.useProgram(this.prog);
+    this.cur = null;
     gl.bindVertexArray(this.vao);
-    gl.uniform1i(u.u_nlights, 0);
+    this.frameUniform("u_nlights", "i", 0);
     this.shadowPass = type;
     for (var p = 0; p < plans.length; p++) {
       var sp = plans[p], point = sp.kind === 3, slot;
@@ -1067,7 +1139,7 @@
         if (type === 3) { res.pass = colorTarget(gl, w, h, half, gl.LINEAR); res.map = colorTarget(gl, w, h, half, gl.LINEAR); }
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, res.fbo);
-      gl.uniformMatrix4fv(u.u_proj, false, sp.projection.elements);
+      this.frameUniform("u_proj", "m4", sp.projection.elements);
       var faces = point ? 6 : 1;
       for (var f = 0; f < faces; f++) {
         if (point) gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_CUBE_MAP_POSITIVE_X + f, res.depth, 0);
@@ -1077,7 +1149,7 @@
         gl.viewport(0, 0, point ? size : w, point ? size : h);
         gl.depthMask(true);
         gl.clear(gl.DEPTH_BUFFER_BIT);
-        gl.uniformMatrix4fv(u.u_view, false, sp.views[f].elements);
+        this.frameUniform("u_view", "m4", sp.views[f].elements);
         for (var c = 0; c < casters.length; c++) this.draw(casters[c], info, null);
       }
       gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
@@ -1119,7 +1191,7 @@
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, null, 0);
-    gl.useProgram(this.prog);
+    this.cur = null;
     gl.bindVertexArray(this.vao);
     gl.enable(gl.DEPTH_TEST);
   };
@@ -1171,14 +1243,13 @@
     var w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
     // shadow type (three.js: 0 basic, 1 PCF, 2 PCF soft = PCF, 3 VSM) -> 2, 1, 3; 0 none
     var sm = r.shadowMap, stype = sm && sm.enabled ? (sm.type === 0 ? 2 : sm.type === 3 ? 3 : 1) : 0;
-    this.useMain(stype || 1);
-    var u = this.u;
-    gl.useProgram(this.prog);
-    this.setUnits(u);
+    this.stype = stype || 1;
+    this.cur = null;
+    this.outLinear = r.outputColorSpace === "srgb-linear" ? 1 : 0;
     this.bindShadowDummies(stype || 1);
     var slots = stype ? this.renderShadows(scene, plan, stype) : {};
     this.prepareEnvs(scene, plan);
-    gl.useProgram(this.prog);
+    this.cur = null;
     gl.viewport(0, 0, w, h);
     var linearOut = r.outputColorSpace === "srgb-linear";
     var cl = plan.clear, s = linearOut ? function (x) { return x; } : R.MathsColor.linear_to_srgb;
@@ -1190,32 +1261,44 @@
     this.tone = r.toneMapping | 0;
     this.background(scene, plan, linearOut, w, h);
     gl.depthMask(true);
-    gl.useProgram(this.prog);
+    this.cur = null;
     gl.bindVertexArray(this.vao);
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
-    gl.uniformMatrix4fv(u.u_view, false, plan.view.elements);
-    gl.uniformMatrix4fv(u.u_proj, false, plan.projection.elements);
-    gl.uniform3f(u.u_cam, plan.camera_position.x, plan.camera_position.y, plan.camera_position.z);
+    this.frameUniform("u_view", "m4", plan.view.elements);
+    this.frameUniform("u_proj", "m4", plan.projection.elements);
+    this.frameUniform("u_cam", "v3", [plan.camera_position.x, plan.camera_position.y, plan.camera_position.z]);
     var n = Math.min(MAX_LIGHTS, plan.light_count);
     this.lightData.fill(0);
-    for (var i = 0; i < n * 28; i++) this.lightData[i] = plan.lights[i];
-    for (var li0 in slots) if (li0 < n) this.lightData[li0 * 28 + 18] = slots[li0] + 1;
-    if (this.shadowData) {
-      gl.uniformMatrix4fv(u.u_shMat, false, this.shadowData.mat);
-      gl.uniform4fv(u.u_shParam, this.shadowData.param);
-      gl.uniform4fv(u.u_shSize, this.shadowData.size);
+    // packed by kind (stable), so each kind's loop reads a contiguous range
+    var order = [];
+    this.lightCounts = [0, 0, 0, 0, 0, 0];
+    for (var i = 0; i < n; i++) { var lk = Math.round(plan.lights[i * 28 + 3]); order.push(i); this.lightCounts[lk]++; }
+    order.sort(function (a, b) { return (plan.lights[a * 28 + 3] - plan.lights[b * 28 + 3]) || a - b; });
+    for (var oi = 0; oi < n; oi++) {
+      var src = order[oi];
+      for (var j = 0; j < 28; j++) this.lightData[oi * 28 + j] = plan.lights[src * 28 + j];
+      if (slots[src] !== undefined) this.lightData[oi * 28 + 18] = slots[src] + 1;
     }
-    gl.uniform4fv(u.u_lights, this.lightData);
-    gl.uniform1i(u.u_nlights, n);
-    gl.uniform4fv(u.u_fog, plan.fog);
-    gl.uniform1f(u.u_pointScale, h * 0.5);
-    gl.uniform1f(u.u_exposure, r.toneMappingExposure === undefined ? 1 : r.toneMappingExposure);
+    if (this.shadowData) {
+      this.frameUniform("u_shMat", "m4", this.shadowData.mat);
+      this.frameUniform("u_shParam", "v4", this.shadowData.param);
+      this.frameUniform("u_shSize", "v4", this.shadowData.size);
+    }
+    this.frameUniform("u_lights", "v4", this.lightData);
+    this.frameUniform("u_nlights", "i", n);
+    this.frameUniform("u_fog", "v4", plan.fog);
+    this.frameUniform("u_pointScale", "f", h * 0.5);
+    this.frameUniform("u_exposure", "f", r.toneMappingExposure === undefined ? 1 : r.toneMappingExposure);
+    // the frame's variant flags: rect area lights, shadow slots, fog kind
+    this.hasRect = this.lightCounts[5] ? 1 : 0;
+    this.hasShadows = 0;
+    for (var si in slots) if (si < n) this.hasShadows = 1;
+    this.fogKind = plan.fog[0] > 1.5 ? 2 : plan.fog[0] > 0.5 ? 1 : 0;
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.dfg);
     gl.activeTexture(gl.TEXTURE10); gl.bindTexture(gl.TEXTURE_2D, this.ltc);
     gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1i(u.u_linearOut, linearOut ? 1 : 0);
     this.linearOut = linearOut;
     var info = { triangles: 0, lines: 0, points: 0, calls: 0 };
     var override = scene.overrideMaterial || null;
@@ -1292,21 +1375,22 @@
     }
   };
 
-  B.envUniforms = function (material) {
-    var gl = this.gl, u = this.u, scene = this.scene, e = this.shadowPass ? null : envOf(material, scene);
+  // the draw's environment: binds its texture on unit 11 and returns the
+  // uniform values (mode 1 prefiltered, 2 equirect), or null
+  B.envBind = function (material) {
+    var gl = this.gl, scene = this.scene, e = this.shadowPass ? null : envOf(material, scene);
     var pm = e && e.pbr ? this.envs.get(e.tex) : null;
-    if (!e || (e.pbr && !pm)) { gl.uniform4f(u.u_env, 0, 0, 0, 0); return; }
+    if (!e || (e.pbr && !pm)) return null;
+    var out;
     gl.activeTexture(gl.TEXTURE11);
     if (e.pbr) {
       gl.bindTexture(gl.TEXTURE_2D, pm.atlas);
-      gl.uniform4f(u.u_envUV, pm.lodMax, 1 / pm.aw, 1 / pm.ah, 0);
       var intensity = e.scene ? (scene.environmentIntensity == null ? 1 : scene.environmentIntensity) : (material.envMapIntensity == null ? 1 : material.envMapIntensity);
-      gl.uniform4f(u.u_env, 1, intensity, 0, 0);
+      out = { mode: 1, uv: [pm.lodMax, 1 / pm.aw, 1 / pm.ah, 0], env: [1, intensity, 0, 0] };
     } else {
-      if (!this.texture(e.tex)) { gl.activeTexture(gl.TEXTURE0); gl.uniform4f(u.u_env, 0, 0, 0, 0); return; }
+      if (!this.texture(e.tex)) { gl.activeTexture(gl.TEXTURE0); return null; }
       var refract = e.tex.mapping === 304 ? (material.refractionRatio == null ? 0.98 : material.refractionRatio) : 0;
-      gl.uniform4f(u.u_envUV, 0, 0, 0, refract);
-      gl.uniform4f(u.u_env, 2, 1, material.combine | 0, material.reflectivity == null ? 1 : material.reflectivity);
+      out = { mode: 2, uv: [0, 0, 0, refract], env: [2, 1, material.combine | 0, material.reflectivity == null ? 1 : material.reflectivity] };
     }
     gl.activeTexture(gl.TEXTURE0);
     // three.js passes the inverse (transpose) of the rotation
@@ -1315,56 +1399,40 @@
     m4.identity();
     if (rot) m4.makeRotationFromEuler(rot);
     var me = m4.elements;
-    gl.uniformMatrix3fv(u.u_envRot, false, [me[0], me[4], me[8], me[1], me[5], me[9], me[2], me[6], me[10]]);
+    out.rot = [me[0], me[4], me[8], me[1], me[5], me[9], me[2], me[6], me[10]];
+    return out;
+  };
+
+  B.envUniforms = function (env) {
+    var gl = this.gl, u = this.u;
+    if (!env) { gl.uniform4f(u.u_env, 0, 0, 0, 0); return; }
+    gl.uniform4fv(u.u_envUV, env.uv);
+    gl.uniform4fv(u.u_env, env.env);
+    gl.uniformMatrix3fv(u.u_envRot, false, env.rot);
   };
 
   B.drawWith = function (item, material, info, group) {
-    var gl = this.gl, u = this.u, o = item.object, kind = item.kind;
+    var gl = this.gl, o = item.object, kind = item.kind;
     var geometry = o.geometry, position = geometry.getAttribute("position");
     var sprite = kind === 7;
     var mu = R.RenderersPlan.material_uniforms(material);
-    gl.uniform4fv(u.u_mat, mu);
-    this.envUniforms(material);
-    gl.uniformMatrix4fv(u.u_model, false, o.matrixWorld.elements);
-    gl.uniformMatrix3fv(u.u_uvt, false, R.RenderersPlan.map_transform(material));
     var mesh = kind === 1 || kind === 2;
+    // buffers and textures first: what is bound decides the program variant
     this.attrib(0, position, 3);
     var hasNormal = mesh && !mu[17] && this.attrib(1, geometry.getAttribute("normal"), 3, [0, 0, 1, 0]);
     if (!hasNormal) this.attrib(1, null, 3, [0, 0, 1, 0]);
     this.attrib(2, geometry.getAttribute("uv"), 2, [0, 0, 0, 0]);
     this.attrib(3, mu[18] ? geometry.getAttribute("color") : null, 3, [1, 1, 1, 1]);
-    gl.uniform1i(u.u_hasNormal, hasNormal ? 1 : 0);
     var dashed = !!material.isLineDashedMaterial || material.type === "LineDashedMaterial";
     this.attrib(9, dashed ? geometry.getAttribute("lineDistance") : null, 1, [0, 0, 0, 0]);
-    gl.uniform1i(u.u_dashed, dashed ? 1 : 0);
-    if (dashed) {
-      gl.uniform1f(u.u_dashScale, material.scale == null ? 1 : material.scale);
-      gl.uniform1f(u.u_dashSize, material.dashSize == null ? 3 : material.dashSize);
-      gl.uniform1f(u.u_dashTotal, (material.dashSize == null ? 3 : material.dashSize) + (material.gapSize == null ? 1 : material.gapSize));
-    } else gl.uniform1f(u.u_dashScale, 0);
     var disp = mesh ? material.displacementMap : null, glD = null;
     if (disp) {
       gl.activeTexture(gl.TEXTURE12);
       glD = this.texture(disp);
       gl.activeTexture(gl.TEXTURE0);
-      if (glD) {
-        if (disp.matrixAutoUpdate !== false && disp.updateMatrix) disp.updateMatrix();
-        gl.uniformMatrix3fv(u.u_dispT, false, disp.matrix.elements);
-        gl.uniform1f(u.u_dispScale, material.displacementScale == null ? 1 : material.displacementScale);
-        gl.uniform1f(u.u_dispBias, material.displacementBias || 0);
-      }
     }
-    gl.uniform1i(u.u_hasDisp, glD ? 1 : 0);
-    gl.uniform1f(u.u_bumpScale, material.bumpScale == null ? 1 : material.bumpScale);
     var sheen = material.sheen || 0, shc = material.sheenColor;
-    if (sheen > 0 && shc) gl.uniform4f(u.u_sheen, shc.r * sheen, shc.g * sheen, shc.b * sheen, Math.min(1, Math.max(0.0001, material.sheenRoughness == null ? 1 : material.sheenRoughness)));
-    else gl.uniform4f(u.u_sheen, 0, 0, 0, 0);
     var tr = this.transTex ? material.transmission || 0 : 0;
-    if (tr > 0) {
-      var ad = material.attenuationDistance, ac = material.attenuationColor;
-      gl.uniform4f(u.u_trans, tr, material.thickness || 0, material.ior == null ? 1.5 : material.ior, isFinite(ad) && ad > 0 ? ad : 0);
-      gl.uniform3f(u.u_attColor, ac ? ac.r : 1, ac ? ac.g : 1, ac ? ac.b : 1);
-    } else gl.uniform4f(u.u_trans, 0, 0, 0, 0);
     var instances = 0;
     if (kind === 2 && o.instanceMatrix) {
       var im = o.instanceMatrix;
@@ -1385,27 +1453,14 @@
       for (var c2 = 4; c2 < 8; c2++) gl.disableVertexAttribArray(c2);
       gl.disableVertexAttribArray(8); gl.vertexAttrib4f(8, 1, 1, 1, 1);
     }
-    gl.uniform1i(u.u_instanced, instances > 0 ? 1 : 0);
     var map = material.map, glTex = map ? this.texture(map) : null;
-    gl.uniform1i(u.u_hasMap, glTex ? 1 : 0);
     // points sample the map across each point, unless the geometry has uvs (then one texel per point, as three.js)
-    gl.uniform1i(u.u_points, kind === 6 && !geometry.getAttribute("uv") ? 1 : 0);
-    gl.uniform1i(u.u_sprite, sprite ? 1 : 0);
-    if (sprite) {
-      var ce = o.center || { x: 0.5, y: 0.5 };
-      gl.uniform2f(u.u_center, ce.x, ce.y);
-      gl.uniform1f(u.u_rotation, material.rotation || 0);
-    }
+    var pointsUv = kind === 6 && !geometry.getAttribute("uv") ? 1 : 0;
     var emap = material.emissiveMap, glE = null;
     if (emap) {
       gl.activeTexture(gl.TEXTURE1);
       glE = this.texture(emap);
-      if (glE) {
-        if (emap.matrixAutoUpdate !== false && emap.updateMatrix) emap.updateMatrix();
-        gl.uniformMatrix3fv(u.u_euvt, false, emap.matrix.elements);
-      }
     }
-    gl.uniform1i(u.u_hasEmap, glE ? 1 : 0);
     var bits = 0;
     for (var mi = 0; mi < MAPS.length; mi++) {
       var spec = MAPS[mi], t = material[spec.prop];
@@ -1419,20 +1474,61 @@
       }
     }
     gl.activeTexture(gl.TEXTURE0);
-    gl.uniform1i(u.u_maps, bits);
+    var env = this.envBind(material);
+    var blending = material.blending === undefined ? 1 : material.blending;
+    var opaque = material.transparent !== true && blending === 1 && !material.alphaToCoverage;
+    var physical = mu[22] > 0.5 ? 1 : 0;
+    var receive = o.receiveShadow && this.hasShadows ? 1 : 0;
+    // the program variant, in SPEC_KEYS order; a shadow caster keeps only what decides its discards
+    var sp = this.shadowPass ? 1 : 0;
+    this.useMain(this.stype, sp ? [glTex ? 1 : 0, pointsUv, 0, opaque ? 1 : 0, 0, bits & 1, 0, 0, 0, dashed ? 1 : 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0] : [
+      glTex ? 1 : 0, pointsUv, hasNormal ? 1 : 0, opaque ? 1 : 0, material.toneMapped === false ? 0 : this.tone, bits, this.outLinear,
+      material.premultipliedAlpha ? 1 : 0, glE ? 1 : 0, dashed ? 1 : 0, receive,
+      mu[15] | 0, mu[13] > 0.5 ? 1 : 0, mu[14] > 0.5 ? 1 : 0, physical, mu[17] > 0.5 ? 1 : 0,
+      physical && sheen > 0 && shc ? 1 : 0, physical && tr > 0 ? 1 : 0, this.hasRect, mu[19] > 0.5 ? this.fogKind : 0, 0, env ? env.mode : 0].concat(mu[13] > 0.5 ? this.lightCounts : [0, 0, 0, 0, 0, 0]));
+    var u = this.u;
+    gl.uniform4fv(u.u_mat, mu);
+    this.envUniforms(env);
+    gl.uniformMatrix4fv(u.u_model, false, o.matrixWorld.elements);
+    gl.uniformMatrix3fv(u.u_uvt, false, R.RenderersPlan.map_transform(material));
+    if (dashed) {
+      gl.uniform1f(u.u_dashScale, material.scale == null ? 1 : material.scale);
+      gl.uniform1f(u.u_dashSize, material.dashSize == null ? 3 : material.dashSize);
+      gl.uniform1f(u.u_dashTotal, (material.dashSize == null ? 3 : material.dashSize) + (material.gapSize == null ? 1 : material.gapSize));
+    } else gl.uniform1f(u.u_dashScale, 0);
+    if (glD) {
+      if (disp.matrixAutoUpdate !== false && disp.updateMatrix) disp.updateMatrix();
+      gl.uniformMatrix3fv(u.u_dispT, false, disp.matrix.elements);
+      gl.uniform1f(u.u_dispScale, material.displacementScale == null ? 1 : material.displacementScale);
+      gl.uniform1f(u.u_dispBias, material.displacementBias || 0);
+    }
+    gl.uniform1i(u.u_hasDisp, glD ? 1 : 0);
+    gl.uniform1f(u.u_bumpScale, material.bumpScale == null ? 1 : material.bumpScale);
+    if (sheen > 0 && shc) gl.uniform4f(u.u_sheen, shc.r * sheen, shc.g * sheen, shc.b * sheen, Math.min(1, Math.max(0.0001, material.sheenRoughness == null ? 1 : material.sheenRoughness)));
+    else gl.uniform4f(u.u_sheen, 0, 0, 0, 0);
+    if (tr > 0) {
+      var ad = material.attenuationDistance, ac = material.attenuationColor;
+      gl.uniform4f(u.u_trans, tr, material.thickness || 0, material.ior == null ? 1.5 : material.ior, isFinite(ad) && ad > 0 ? ad : 0);
+      gl.uniform3f(u.u_attColor, ac ? ac.r : 1, ac ? ac.g : 1, ac ? ac.b : 1);
+    } else gl.uniform4f(u.u_trans, 0, 0, 0, 0);
+    gl.uniform1i(u.u_instanced, instances > 0 ? 1 : 0);
+    gl.uniform1i(u.u_sprite, sprite ? 1 : 0);
+    if (sprite) {
+      var ce = o.center || { x: 0.5, y: 0.5 };
+      gl.uniform2f(u.u_center, ce.x, ce.y);
+      gl.uniform1f(u.u_rotation, material.rotation || 0);
+    }
+    if (glE) {
+      if (emap.matrixAutoUpdate !== false && emap.updateMatrix) emap.updateMatrix();
+      gl.uniformMatrix3fv(u.u_euvt, false, emap.matrix.elements);
+    }
     if (bits) gl.uniformMatrix3fv(u.u_t, false, this.mapTransforms);
     var ns = material.normalScale, flip = mu[16] === 1 ? -1 : 1;
     gl.uniform2f(u.u_normalScale, (ns ? ns.x : 1) * flip, (ns ? ns.y : 1) * flip);
     gl.uniform1f(u.u_aoIntensity, material.aoMapIntensity == null ? 1 : material.aoMapIntensity);
-    var blending = material.blending === undefined ? 1 : material.blending;
-    var opaque = material.transparent !== true && blending === 1 && !material.alphaToCoverage;
-    gl.uniform1i(u.u_opaque, opaque ? 1 : 0);
-    gl.uniform1i(u.u_premult, material.premultipliedAlpha ? 1 : 0);
-    gl.uniform1i(u.u_tone, material.toneMapped === false ? 0 : this.tone);
     gl.uniform1f(u.u_pointSize, (material.size || 1) * this.renderer._pixelRatio);
     gl.uniform1i(u.u_sizeAtt, material.sizeAttenuation === false ? 0 : 1);
     gl.frontFace(o.matrixWorld.determinant() < 0 ? gl.CW : gl.CCW);
-    gl.uniform1i(u.u_receive, o.receiveShadow ? 1 : 0);
     if (this.shadowPass) {
       // the depth material three.js draws shadow casters with: depth only, no blending or offset
       gl.disable(gl.BLEND);
