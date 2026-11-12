@@ -27,13 +27,15 @@
 <body>
 <header>
   <h1>RangerThree playground</h1>
-  <span class="note">three.js API from Rust (compiled to JavaScript by Ranger), drawn by the crate's software renderer</span>
+  <span class="note">three.js API from Rust (compiled to JavaScript by Ranger), drawn on the GPU (WebGL2) or by the crate's software renderer</span>
 </header>
 <main>
   <section class="panel">
     <div class="bar">
       <label for="example">Example</label>
       <select id="example"></select>
+      <label for="backend">Renderer</label>
+      <select id="backend"><option value="gpu">GPU (WebGL2)</option><option value="software">Software</option></select>
       <button class="run" id="run">Run (Ctrl+Enter)</button>
     </div>
     <textarea id="code" spellcheck="false" aria-label="Code"></textarea>
@@ -48,12 +50,13 @@
 <script src="three-scene.js"></script>
 <script src="three-curves.js"></script>
 <script src="three-renderer.js"></script>
+<script src="three-webgl.js"></script>
 <script src="examples.js"></script>
 <script>
 (function () {
   var sel = document.getElementById("example"), code = document.getElementById("code");
   var canvas = document.getElementById("view"), status = document.getElementById("status");
-  var current = null;
+  var current = null, backendSel = document.getElementById("backend");
   // drag to orbit around `target`, wheel to zoom (a small OrbitControls)
   function orbit(camera, target) {
     target = target || new THREE.Vector3();
@@ -82,11 +85,15 @@
   Object.keys(EXAMPLES).forEach(function (k) { var o = document.createElement("option"); o.value = k; o.textContent = k; sel.appendChild(o); });
   function load(name) { code.value = EXAMPLES[name].trim() + "\n"; run(); }
   function run() {
-    if (current) current.setAnimationLoop(null);
+    if (current) { current.setAnimationLoop(null); current.dispose(); }
     cleanups.forEach(function (f) { f(); }); cleanups = [];
     canvas.onpointerdown = canvas.onpointerup = canvas.onpointermove = canvas.onwheel = null;
     status.className = ""; status.textContent = "";
-    var renderer = new THREE.WebGLRenderer({ canvas: canvas });
+    // a canvas keeps the first context it gave, so each run gets a new one
+    var fresh = canvas.cloneNode(false);
+    canvas.parentNode.replaceChild(fresh, canvas);
+    canvas = fresh;
+    var renderer = new THREE.WebGLRenderer({ canvas: canvas, software: backendSel.value === "software" });
     renderer.setSize(canvas.clientWidth || 640, Math.round((canvas.clientWidth || 640) * 0.75), false);
     current = renderer;
     var frames = 0, t0 = performance.now(), shown = false;
@@ -96,6 +103,7 @@
       var dt = performance.now() - t0;
       var info = renderer.info.render;
       var what = info.triangles + " triangles" + (info.lines ? ", " + info.lines + " lines" : "") + (info.points ? ", " + info.points + " points" : "");
+      what += " (" + (renderer.backend === "webgl2" ? "GPU" : "software") + ")";
       if (dt > 1000) { status.textContent = (frames * 1000 / dt).toFixed(1) + " fps, " + what; frames = 0; t0 = performance.now(); shown = true; }
       else if (!shown) status.textContent = what;
     };
@@ -103,6 +111,7 @@
     catch (e) { status.className = "err"; status.textContent = String(e && e.stack || e); }
   }
   sel.onchange = function () { load(sel.value); };
+  backendSel.onchange = run;
   document.getElementById("run").onclick = run;
   code.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); }

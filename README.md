@@ -7,10 +7,16 @@ facade.
 
 - `three/` is the crate: maths, core (Object3D, BufferGeometry, Raycaster,
   Clock), geometries (including Shape, Extrude, Tube, Edges and Wireframe),
-  curves, earcut, materials, textures, and the software renderer.
+  curves, earcut, materials, textures, the software renderer
+  (`renderers/soft.rs`) and the frame plan a GPU backend draws from
+  (`renderers/plan.rs`).
 - `js/` is the facade, which defines `THREE` over `RangerThreeCore`. Load it
   in this order: `three.js`, `three-scene.js`, `three-curves.js`,
-  `three-renderer.js`.
+  `three-renderer.js`, `three-webgl.js`. `WebGLRenderer` draws with WebGL2
+  when the canvas offers it and with the software renderer otherwise, or
+  when it is given `{ software: true }`; `renderer.backend` says which.
+  Lighting follows three.js's units (Lambert diffuse is albedo / pi), so
+  scenes light the same as in three.js.
 - `playground/` is the browser playground that GitHub Pages publishes on
   every push to `main` (`.github/workflows/playground.yml`).
 - `parity/` is the value meter (`node parity/value.mjs`), and `tests/` holds

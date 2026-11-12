@@ -18,50 +18,51 @@ use crate::maths::vector3::Vector3;
 use crate::scenes::fog::Fog;
 use crate::textures::texture::{Image, Texture, CLAMP_TO_EDGE_WRAPPING, MIRRORED_REPEAT_WRAPPING, NEAREST_FILTER, REPEAT_WRAPPING, UV_MAPPING};
 
+const RECIPROCAL_PI: f64 = 0.3183098861837907;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct LightIn {
+pub struct LightIn {
     /// 0 ambient, 1 hemisphere, 2 directional, 3 point, 4 spot
-    kind: i64,
-    color: Color,
-    ground: Color,
-    intensity: f64,
-    position: Vector3,
-    direction: Vector3,
-    distance: f64,
-    decay: f64,
-    cos_outer: f64,
-    cos_inner: f64,
+    pub kind: i64,
+    pub color: Color,
+    pub ground: Color,
+    pub intensity: f64,
+    pub position: Vector3,
+    pub direction: Vector3,
+    pub distance: f64,
+    pub decay: f64,
+    pub cos_outer: f64,
+    pub cos_inner: f64,
 }
 
 /// What shading needs from a material.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Surface {
-    kind: MaterialKind,
-    color: Color,
-    emissive: Color,
-    specular: Color,
-    shininess: f64,
-    diffuse_scale: f64,
-    lit: bool,
-    specular_on: bool,
+pub struct Surface {
+    pub kind: MaterialKind,
+    pub color: Color,
+    pub emissive: Color,
+    pub specular: Color,
+    pub shininess: f64,
+    pub diffuse_scale: f64,
+    pub lit: bool,
+    pub specular_on: bool,
 }
 
 /// A vertex after lighting, in view space. Untextured: `color` is final.
 /// Textured: `color` is the diffuse light times the albedo (the texel
-/// multiplies it), `add` the specular and emissive light, `fog` the fog
-/// amount and `u`, `v` the texture coordinates.
+/// multiplies it), `add` the specular and emissive light and `u`, `v`
+/// the texture coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Vert {
     view: Vector3,
     color: Color,
     add: Color,
-    fog: f64,
     u: f64,
     v: f64,
 }
 
 fn vert(view: Vector3, color: Color) -> Vert {
-    Vert { view, color, add: Color::new(0.0, 0.0, 0.0), fog: 0.0, u: 0.0, v: 0.0 }
+    Vert { view, color, add: Color::new(0.0, 0.0, 0.0), u: 0.0, v: 0.0 }
 }
 
 /// Light at a surface point, split so a texture can scale the diffuse part.
@@ -82,7 +83,7 @@ pub struct TexImage {
 }
 
 /// How a draw samples its map.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 struct Sampler {
     /// index into `SoftRenderer::textures`, -1 when there is no map
     slot: i64,
@@ -94,6 +95,8 @@ struct Sampler {
     nearest: bool,
     alpha_test: f64,
     fog_color: Color,
+    /// fog per pixel from the depth (big triangles fog wrongly per vertex)
+    fog: Option<Fog>,
 }
 
 /// Per-frame state the draw calls share.
@@ -144,7 +147,6 @@ fn lerp_vert(a: &Vert, b: &Vert, t: f64) -> Vert {
         view: v,
         color: mix_color(&a.color, &b.color, t),
         add: mix_color(&a.add, &b.add, t),
-        fog: a.fog + (b.fog - a.fog) * t,
         u: a.u + (b.u - a.u) * t,
         v: a.v + (b.v - a.v) * t,
     }
@@ -188,7 +190,7 @@ fn wrap_coord(v: f64, mode: i64) -> f64 {
     }
 }
 
-fn surface_of(m: &Material) -> Surface {
+pub fn surface_of(m: &Material) -> Surface {
     let lit = match m.kind {
         MaterialKind::MeshLambert
         | MaterialKind::MeshPhong
@@ -224,7 +226,10 @@ fn shade_parts(s: &Surface, albedo: &Color, n: &Vector3, at: &Vector3, frame: &F
     if s.kind == MaterialKind::MeshNormal {
         let mut vn = *n;
         vn.transform_direction(&frame.view);
-        return Lit { diffuse: Color::new(vn.x * 0.5 + 0.5, vn.y * 0.5 + 0.5, vn.z * 0.5 + 0.5), add: none };
+        // three.js writes the packed normal without a colour space, so
+        // undo the sRGB encoding the output applies
+        let c = Color::new(srgb_to_linear(vn.x * 0.5 + 0.5), srgb_to_linear(vn.y * 0.5 + 0.5), srgb_to_linear(vn.z * 0.5 + 0.5));
+        return Lit { diffuse: c, add: none };
     }
     if !s.lit {
         return Lit { diffuse: *albedo, add: none };
@@ -281,14 +286,16 @@ fn shade_parts(s: &Surface, albedo: &Color, n: &Vector3, at: &Vector3, frame: &F
                 let mut h = dir;
                 h.add(&to_eye);
                 h.normalize();
-                let spec = n.dot(&h).max(0.0).powf(s.shininess) * (s.shininess + 2.0) / 8.0;
+                // three.js's BRDF_BlinnPhong: (s / 2 + 1) / pi * 0.25
+                let spec = n.dot(&h).max(0.0).powf(s.shininess) * (s.shininess + 2.0) / 8.0 * RECIPROCAL_PI;
                 let e = l.intensity * k * spec * nl;
                 sr += c.r * e;
                 sg += c.g * e;
                 sb += c.b * e;
             }
         }
-        let e = l.intensity * k * diffuse;
+        // BRDF_Lambert: albedo / pi (three.js's physical light units)
+        let e = l.intensity * k * diffuse * RECIPROCAL_PI;
         r += c.r * e;
         g += c.g * e;
         b += c.b * e;
@@ -304,7 +311,7 @@ fn shade_parts(s: &Surface, albedo: &Color, n: &Vector3, at: &Vector3, frame: &F
     }
 }
 
-fn collect_lights(objects: &Vec<ObjectRef>) -> Vec<LightIn> {
+pub fn collect_lights(objects: &Vec<ObjectRef>) -> Vec<LightIn> {
     let mut out: Vec<LightIn> = Vec::new();
     for o in objects.iter() {
         let ob = o.borrow();
@@ -464,7 +471,11 @@ impl SoftRenderer {
             nearest: false,
             alpha_test: material.alpha_test,
             fog_color,
+            fog: None,
         };
+        if material.fog {
+            s.fog = frame.fog.clone();
+        }
         if let Some(t) = &material.map {
             let tb = t.borrow();
             s.slot = self.texture_slot(tb.id);
@@ -693,10 +704,6 @@ impl SoftRenderer {
         let textured = sampler.slot >= 0;
         let uvs = if textured { geometry.get_attribute("uv") } else { None };
         let blend = material.transparent && (opacity < 1.0 || textured);
-        let mut fog_on: Option<Fog> = None;
-        if material.fog {
-            fog_on = frame.fog.clone();
-        }
         let mut i = 0;
         while i + 2 < count {
             let mut ids: Vec<usize> = vec![i, i + 1, i + 2];
@@ -781,9 +788,6 @@ impl SoftRenderer {
                 if textured {
                     let mut vx = vert(v, lit.diffuse);
                     vx.add = lit.add;
-                    if let Some(f) = &fog_on {
-                        vx.fog = f.factor(-v.z);
-                    }
                     if let Some(ua) = &uvs {
                         let ub = ua.borrow();
                         vx.u = ub.get_x(ids[k]);
@@ -875,7 +879,8 @@ impl SoftRenderer {
         if !material.vertex_colors {
             colors = None;
         }
-        let scale = frame.projection.elements[5] * self.height as f64 * 0.5;
+        // three.js: size * (drawing buffer height / 2) / depth
+        let scale = self.height as f64 * 0.5;
         for i in 0..pos.count {
             let mut p = pos.get_vector3(i);
             p.apply_matrix4(world);
@@ -891,11 +896,13 @@ impl SoftRenderer {
             c = self.fogged(&c, p.z, frame, material.fog);
             let s = self.to_screen(&p, frame);
             let size = if material.size_attenuation { material.size * scale / -p.z } else { material.size };
+            // as GL: the pixels whose centres fall in the point's square,
+            // at least one pixel
             let half = (size * 0.5).max(0.5);
-            let x0 = (s.x - half).floor() as i64;
-            let x1 = (s.x + half).ceil() as i64;
-            let y0 = (s.y - half).floor() as i64;
-            let y1 = (s.y + half).ceil() as i64;
+            let x0 = (s.x - half - 0.5).ceil() as i64;
+            let x1 = (s.x + half - 0.5).ceil() as i64;
+            let y0 = (s.y - half - 0.5).ceil() as i64;
+            let y1 = (s.y + half - 0.5).ceil() as i64;
             for y in y0.max(0)..y1.min(self.height) {
                 for x in x0.max(0)..x1.min(self.width) {
                     self.plot(x, y, s.z, &c);
@@ -1104,7 +1111,10 @@ impl SoftRenderer {
                             x += 1;
                             continue;
                         }
-                        let fog = w0 * va.fog + w1 * vb.fog + w2 * vc.fog;
+                        let mut fog = 0.0;
+                        if let Some(f) = &s.fog {
+                            fog = f.factor(qs);
+                        }
                         let mut r = (w0 * va.color.r + w1 * vb.color.r + w2 * vc.color.r) * tr + w0 * va.add.r + w1 * vb.add.r + w2 * vc.add.r;
                         let mut g = (w0 * va.color.g + w1 * vb.color.g + w2 * vc.color.g) * tg + w0 * va.add.g + w1 * vb.add.g + w2 * vc.add.g;
                         let mut bl = (w0 * va.color.b + w1 * vb.color.b + w2 * vc.color.b) * tb + w0 * va.add.b + w1 * vb.add.b + w2 * vc.add.b;

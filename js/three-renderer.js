@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MIT
 //
-// THREE.WebGLRenderer's API over the crate's software renderer
-// (three/src/renderers/soft.rs): the scene is drawn into a pixel buffer and
-// copied to the canvas. The GL backend will take the same calls.
+// THREE.WebGLRenderer's API. With a WebGL2 canvas it draws on the GPU
+// (three-webgl.js over the crate's frame plan, renderers/plan.rs); otherwise,
+// or with { software: true }, the crate's software renderer
+// (renderers/soft.rs) draws into a pixel buffer copied to a 2D canvas.
 (function (T, R) {
   "use strict";
   function WebGLRenderer(parameters) {
@@ -20,12 +21,25 @@
     this.shadowMap = { enabled: false, type: 1 };
     this.info = { render: { frame: 0, calls: 0, triangles: 0, points: 0, lines: 0 }, memory: { geometries: 0, textures: 0 } };
     this.isWebGLRenderer = true;
+    this._gpu = null;
+    var canvas = this.domElement;
+    if (p.software !== true && T.__WebGL2Backend && canvas && canvas.getContext) {
+      var gl = null;
+      try {
+        gl = canvas.getContext("webgl2", { alpha: !!p.alpha, antialias: p.antialias !== false, depth: true, premultipliedAlpha: p.premultipliedAlpha !== false, preserveDrawingBuffer: !!p.preserveDrawingBuffer, powerPreference: p.powerPreference || "default" });
+      } catch (e) { gl = null; }
+      if (gl) {
+        try { this._gpu = new T.__WebGL2Backend(gl, this); } catch (e) { if (typeof console !== "undefined") console.warn(String(e)); this._gpu = null; }
+      }
+    }
+    // "webgl2" or "software"
+    this.backend = this._gpu ? "webgl2" : "software";
     if (this.domElement) this._resize();
   }
   var P = WebGLRenderer.prototype;
   P._resize = function () {
     var w = Math.max(1, Math.floor(this._width * this._pixelRatio)), h = Math.max(1, Math.floor(this._height * this._pixelRatio));
-    this._soft.set_size(w, h);
+    if (!this._gpu) this._soft.set_size(w, h);
     if (this.domElement) { this.domElement.width = w; this.domElement.height = h; }
     this._image = null;
   };
@@ -40,7 +54,10 @@
   P.getSize = function (target) { return (target || new T.Vector2()).set(this._width, this._height); };
   P.setPixelRatio = function (r) { this._pixelRatio = r || 1; this._resize(); };
   P.getPixelRatio = function () { return this._pixelRatio; };
-  P.getDrawingBufferSize = function (target) { return (target || new T.Vector2()).set(this._soft.width, this._soft.height); };
+  P.getDrawingBufferSize = function (target) {
+    if (this._gpu) return (target || new T.Vector2()).set(this._gpu.gl.drawingBufferWidth, this._gpu.gl.drawingBufferHeight);
+    return (target || new T.Vector2()).set(this._soft.width, this._soft.height);
+  };
   P.setClearColor = function (color, alpha) {
     var c = new T.Color(color);
     this._soft.clear_color = c;
@@ -97,6 +114,11 @@
     this.info.memory.textures = count;
   };
   P.render = function (scene, camera) {
+    if (this._gpu) {
+      this._gpu.render(scene, camera);
+      this.info.render.frame++;
+      return;
+    }
     this._uploadTextures(scene);
     this._soft.render(scene, camera);
     this.info.render.frame++;
@@ -107,7 +129,10 @@
     this._present();
   };
   // the pixel buffer as RGBA bytes
-  P.readPixels = function () { return Uint8ClampedArray.from(this._soft.pixels); };
+  P.readPixels = function () {
+    if (this._gpu) return this._gpu.readPixels();
+    return Uint8ClampedArray.from(this._soft.pixels);
+  };
   P._present = function () {
     var canvas = this.domElement;
     if (!canvas || !canvas.getContext) return;
@@ -126,9 +151,18 @@
     var tick = function (t) { if (self._loop !== fn) return; fn(t); requestAnimationFrame(tick); };
     requestAnimationFrame(tick);
   };
-  P.clear = function () { this._soft.clear(this._soft.clear_color, this._soft.clear_alpha); this._present(); };
+  P.clear = function () {
+    if (this._gpu) {
+      var gl = this._gpu.gl, c = this._soft.clear_color, s = R.MathsColor.linear_to_srgb;
+      gl.clearColor(s(c.r), s(c.g), s(c.b), this._soft.clear_alpha);
+      gl.depthMask(true);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      return;
+    }
+    this._soft.clear(this._soft.clear_color, this._soft.clear_alpha); this._present();
+  };
   P.compile = function () {};
-  P.dispose = function () { this._loop = null; };
+  P.dispose = function () { this._loop = null; if (this._gpu) this._gpu.dispose(); };
   P.forceContextLoss = function () {};
   // ---- loaders -----------------------------------------------------------
   function Loader(manager) { this.manager = manager || null; this.crossOrigin = "anonymous"; this.withCredentials = false; this.path = ""; this.resourcePath = ""; this.requestHeader = {}; }
@@ -169,6 +203,7 @@
   T.Loader = T.Loader || Loader;
   T.ImageLoader = T.ImageLoader || ImageLoader;
   T.TextureLoader = T.TextureLoader || TextureLoader;
+  WebGLRenderer.decodeImage = decodeImage;
   T.WebGLRenderer = WebGLRenderer;
   T.SoftwareRenderer = WebGLRenderer;
 })(THREE, RangerThreeCore);

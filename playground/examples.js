@@ -117,24 +117,27 @@ renderer.setAnimationLoop((t) => {
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xf4f4f0);
 const camera = new THREE.PerspectiveCamera(45, 4 / 3, 0.1, 100);
-camera.position.set(3, 2.5, 4);
+camera.position.set(0, 2.5, 7);
 camera.lookAt(0, 0, 0);
 
+// EdgesGeometry keeps the edges between faces that meet at more than
+// the threshold angle; WireframeGeometry keeps every triangle edge
 const geometry = new THREE.DodecahedronGeometry(1.3, 0);
-const solid = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ color: 0x5b8def }));
-scene.add(solid);
-scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-const light = new THREE.DirectionalLight(0xffffff, 1.5);
+const solid = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ color: 0x5b8def, polygonOffset: true, polygonOffsetFactor: 1 }));
+solid.add(new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color: 0x1b2a4a })));
+solid.position.x = -1.8;
+const wire = new THREE.LineSegments(new THREE.WireframeGeometry(new THREE.TorusKnotGeometry(0.9, 0.3, 64, 8)), new THREE.LineBasicMaterial({ color: 0xd8344f }));
+wire.position.x = 1.8;
+scene.add(solid, wire);
+scene.add(new THREE.AmbientLight(0xffffff, 1.5));
+const light = new THREE.DirectionalLight(0xffffff, 4);
 light.position.set(2, 3, 4);
 scene.add(light);
 
-// the edges are computed in Rust; this renderer does not draw lines yet
-const edges = new THREE.EdgesGeometry(geometry);
-const wire = new THREE.WireframeGeometry(geometry);
-console.log("edge segments", edges.attributes.position.count / 2, "wire segments", wire.attributes.position.count / 2);
-
 renderer.setAnimationLoop((t) => {
   solid.rotation.y = t / 1500;
+  wire.rotation.y = -t / 2000;
+  wire.rotation.x = t / 3000;
   renderer.render(scene, camera);
 });`
 };

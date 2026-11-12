@@ -1,0 +1,69 @@
+// Renders every playground example at a fixed time with three.js r185's
+// own WebGLRenderer (tmp/three-ref, parity/tools/fetch-three.sh) and with
+// RangerThree's GPU and software backends, in headless Chromium, and
+// prints the mean per-channel difference (0..255) of each against
+// three.js. Math.random is seeded; examples that also draw random numbers
+// inside three.js (uuids) differ for that reason alone.
+//
+//   bash scripts/build-playground.sh && node tests/render-compare.mjs [--grep=re] [--t=ms]
+import { createServer } from "node:http";
+import { readFileSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const arg = (k, d) => (process.argv.find((a) => a.startsWith(`--${k}=`)) || "").split("=")[1] || d;
+const grep = new RegExp(arg("grep", "."));
+const t = arg("t", "1000");
+const files = {
+  "/page.html": join(ROOT, "tests/render-compare.html"),
+  "/three.cjs": join(ROOT, "tmp/three-ref/three/build/three.cjs"),
+};
+for (const f of ["rangerthree-core.js", "three.js", "three-scene.js", "three-curves.js", "three-renderer.js", "three-webgl.js", "examples.js"]) files["/" + f] = join(ROOT, "build/site", f);
+for (const [k, f] of Object.entries(files)) if (!existsSync(f)) { console.error(`missing ${f} (${k})`); process.exit(2); }
+const server = createServer((req, res) => {
+  const f = files[req.url.split("?")[0]];
+  if (!f) { res.writeHead(404); res.end(); return; }
+  res.writeHead(200, { "content-type": f.endsWith(".html") ? "text/html" : "text/javascript" });
+  res.end(readFileSync(f));
+}).listen(0);
+const base = `http://localhost:${server.address().port}`;
+const { chromium } = createRequire(import.meta.url)("playwright");
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 640, height: 480 } });
+
+async function shot(query, name) {
+  await page.goto(`${base}/page.html?${query}&t=${t}&ex=${encodeURIComponent(name)}`);
+  await page.waitForFunction(() => window.__done, null, { timeout: 30000 });
+  await page.waitForTimeout(200);
+  const err = await page.evaluate(() => window.__err);
+  // pixels of the canvas as RGBA
+  const px = await page.evaluate(() => {
+    const c = document.getElementById("c"), o = document.createElement("canvas");
+    o.width = c.width; o.height = c.height;
+    const g = o.getContext("2d"); g.drawImage(c, 0, 0);
+    return Array.from(g.getImageData(0, 0, o.width, o.height).data);
+  });
+  return { err, px };
+}
+function diff(a, b) {
+  let s = 0, n = 0;
+  for (let i = 0; i < a.length; i += 4) { s += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]); n += 3; }
+  return s / n;
+}
+
+await page.goto(`${base}/page.html?impl=ours&ex=none`);
+await page.waitForFunction(() => window.__done);
+const names = await page.evaluate(() => Object.keys(EXAMPLES));
+console.log("example | gpu | software (mean difference to three.js, 0..255)");
+for (const [i, name] of names.entries()) {
+  if (!grep.test(name)) continue;
+  const ref = await shot("impl=ref", name);
+  const gpu = await shot("impl=ours", name);
+  const soft = await shot("impl=ours&backend=software", name);
+  for (const [tag, r] of [["ref", ref], ["gpu", gpu], ["soft", soft]]) if (r.err) console.log(`  ${tag} error: ${r.err.split("\n")[0]}`);
+  console.log(`${name} | ${diff(ref.px, gpu.px).toFixed(1)} | ${diff(ref.px, soft.px).toFixed(1)}`);
+}
+await browser.close();
+server.close();
