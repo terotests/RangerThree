@@ -1,6 +1,6 @@
 // Renders every playground example at a fixed time with three.js r185's
 // own WebGLRenderer (tmp/three-ref, parity/tools/fetch-three.sh) and with
-// RangerThree's GPU and software backends, in headless Chromium, and
+// RangerThree's GPU, GPU command and software backends, in headless Chromium, and
 // prints the mean per-channel difference (0..255) of each against
 // three.js. Math.random is seeded; examples that also draw random numbers
 // inside three.js (uuids) differ for that reason alone.
@@ -25,7 +25,7 @@ const files = {
   "/page.html": join(ROOT, "tests/render-compare.html"),
   "/three.cjs": join(ROOT, "tmp/three-ref/three/build/three.cjs"),
 };
-for (const f of ["rangerthree-core.js", "three.js", "three-scene.js", "three-curves.js", "three-renderer.js", "three-webgl.js", "examples.js"]) files["/" + f] = join(ROOT, "build/site", f);
+for (const f of ["rangerthree-core.js", "three.js", "three-scene.js", "three-curves.js", "three-renderer.js", "three-webgl.js", "gpu-webgl2.js", "examples.js"]) files["/" + f] = join(ROOT, "build/site", f);
 for (const [k, f] of Object.entries(files)) if (!existsSync(f)) { console.error(`missing ${f} (${k})`); process.exit(2); }
 const SHIM = "const T = window.THREE; export const " + ["UniformsLib", "ClampToEdgeWrapping", "DataTexture", "DataUtils", "FloatType", "HalfFloatType", "LinearFilter", "NearestFilter", "RGBAFormat", "UVMapping"].map((k) => `${k} = T.${k}`).join(", ") + ";";
 const server = createServer((req, res) => {
@@ -65,17 +65,18 @@ function diff(a, b) {
 await page.goto(`${base}/page.html?impl=ours&ex=none`);
 await page.waitForFunction(() => window.__done);
 const names = await page.evaluate(() => Object.keys(EXAMPLES));
-console.log("example | gpu | software (mean difference to three.js, 0..255)");
+console.log("example | gpu | commands | software (mean difference to three.js, 0..255)");
 for (const [i, name] of names.entries()) {
   if (!grep.test(name)) continue;
   const ref = await shot("impl=ref", name);
   const gpu = await shot("impl=ours", name);
+  const cmd = await shot("impl=ours&backend=commands", name);
   const soft = await shot("impl=ours&backend=software", name);
-  for (const [tag, r] of [["ref", ref], ["gpu", gpu], ["soft", soft]]) if (r.err) console.log(`  ${tag} error: ${r.err.split("\n")[0]}`);
+  for (const [tag, r] of [["ref", ref], ["gpu", gpu], ["commands", cmd], ["soft", soft]]) if (r.err) console.log(`  ${tag} error: ${r.err.split("\n")[0]}`);
   if (arg("png", "")) { const { writeFileSync, mkdirSync } = await import("node:fs"); const d = arg("png", ""); mkdirSync(d, { recursive: true });
     const base64 = async (q) => { await page.goto(`${base}/page.html?${q}${extra}&t=${t}&ex=${encodeURIComponent(name)}`); await page.waitForFunction(() => window.__done); await page.waitForTimeout(200); return page.evaluate(() => document.getElementById("c").toDataURL("image/png").split(",")[1]); };
-    for (const [tag, q] of [["ref", "impl=ref"], ["gpu", "impl=ours"]]) writeFileSync(`${d}/${name.replace(/[^a-z0-9]+/gi, "_")}.${tag}.png`, Buffer.from(await base64(q), "base64")); }
-  console.log(`${name} | ${diff(ref.px, gpu.px).toFixed(1)} | ${diff(ref.px, soft.px).toFixed(1)}`);
+    for (const [tag, q] of [["ref", "impl=ref"], ["gpu", "impl=ours"], ["commands", "impl=ours&backend=commands"]]) writeFileSync(`${d}/${name.replace(/[^a-z0-9]+/gi, "_")}.${tag}.png`, Buffer.from(await base64(q), "base64")); }
+  console.log(`${name} | ${diff(ref.px, gpu.px).toFixed(1)} | ${diff(ref.px, cmd.px).toFixed(1)} | ${diff(ref.px, soft.px).toFixed(1)}`);
 }
 await browser.close();
 server.close();
