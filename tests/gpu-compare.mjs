@@ -57,6 +57,7 @@ for (const name of Object.keys(ctx.EXAMPLES)) {
     const canvas = document.getElementById("c"), gl = renderer.getContext ? renderer.getContext() : canvas.getContext("webgl2");
     const read = () => { const px = new Uint8Array(canvas.width * canvas.height * 4); gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, px); return px; };
     const R = RangerThreeCore, t = 1000;
+    const byteArray = (b) => !b ? new Uint8Array(0) : b._view ? new Uint8Array(b._view.buffer, b._view.byteOffset, b.byteLength) : Uint8Array.from(b);
     const tw = [], tg = [];
     let a, frame;
     for (let i = 0; i < frames; i++) {
@@ -72,6 +73,7 @@ for (const name of Object.keys(ctx.EXAMPLES)) {
     let b, first = null; const pl = [], py = [];
     for (let i = 0; i < frames; i++) {
       const t0 = performance.now();
+      GpuWebGL2.uploadImages(gpu, __scene, THREE.WebGLRenderer.decodeImage);
       frame = gpu.render(__scene, __camera, s);
       const t1 = performance.now();
       if (frame.missing.length) return { missing: frame.missing };
@@ -87,7 +89,7 @@ for (const name of Object.keys(ctx.EXAMPLES)) {
     const c = frame.commands;
     return { mean: sum / a.length, max, far: far / a.length, webgl: med(tw), gpu: med(tg), plan: med(pl), play: med(py),
       commands: c.count, ints: c.ints.length, floats: c.floats.length,
-      dump: { ints: first.ints, floats: Array.from(first.floats), texts: first.texts, pixels: Array.from(b), w: canvas.width, h: canvas.height } };
+      dump: { ints: first.ints, floats: Array.from(first.floats), texts: first.texts, bytes: Array.from(byteArray(first.bytes)), pixels: Array.from(b), w: canvas.width, h: canvas.height } };
   }, { lib: LIB, script: pageScript(ctx.EXAMPLES[name]), frames: FRAMES });
   if (r.error) { rows.push(`ERROR ${name}: ${r.error}`); continue; }
   if (r.missing) { rows.push(`  --  ${name}: needs ${r.missing.join(", ")}`); continue; }
@@ -100,7 +102,7 @@ for (const name of Object.keys(ctx.EXAMPLES)) {
   if (DUMP) {
     const slug = name.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
     const d = r.dump;
-    fs.writeFileSync(path.join(DUMP, slug + ".json"), JSON.stringify({ name, w: d.w, h: d.h, ints: d.ints, floats: d.floats, texts: d.texts }));
+    fs.writeFileSync(path.join(DUMP, slug + ".json"), JSON.stringify({ name, w: d.w, h: d.h, ints: d.ints, floats: d.floats, texts: d.texts, bytes: d.bytes }));
     fs.writeFileSync(path.join(DUMP, slug + ".rgba"), Buffer.from(d.pixels));
   }
 }

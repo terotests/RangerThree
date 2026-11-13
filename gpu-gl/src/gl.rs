@@ -114,6 +114,7 @@ gl_api! {
     TexImage2D: fn(GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, *const c_void);
     TexParameteri: fn(GLenum, GLenum, GLint);
     PixelStorei: fn(GLenum, GLint);
+    GenerateMipmap: fn(GLenum);
     ActiveTexture: fn(GLenum);
     GenFramebuffers: fn(GLsizei, *mut GLuint);
     DeleteFramebuffers: fn(GLsizei, *const GLuint);

@@ -27,7 +27,7 @@
 //! |---|---|---|---|
 //! | 1 | BUFFER | id, kind (0 f32 vertex data, 1 u32 index), dynamic, n | kind 0: n values (kind 1: n ints follow in `ints`) |
 //! | 2 | PROGRAM | id, vs text, fs text, uniform count, then that many name texts | |
-//! | 3 | TEXTURE | id, cube, internal format, format, type, w, h, min filter, mag filter, wrap s, wrap t, compare (0/1), data (0 none, 1 floats, 2 bytes), offset, n | data 1: n values |
+//! | 3 | TEXTURE | id, cube, internal format, format, type, w, h, min filter, mag filter, wrap s, wrap t, flags (1 depth compare, 2 make mipmaps), data (0 none, 1 floats, 2 bytes), offset, n | data 1: n values; data 2: n bytes at offset in `bytes`, rows bottom first |
 //! | 4 | PASS | target (0 the screen), w, h, clear (bit 1 colour, 2 depth) | r, g, b, a, depth |
 //! | 5 | USE | program id | |
 //! | 6 | UNIFORM | location (index in the program's names), kind, count | kind 1 f, 2 vec2, 3 vec3, 4 vec4, 5 mat3, 6 mat4: count values each that size; kind 7 int: count ints follow in `ints` |
@@ -141,7 +141,7 @@ impl GpuCommands {
     }
 
     /// A texture; `params` = cube, internal format, format, type, w, h, min
-    /// filter, mag filter, wrap s, wrap t, compare. `data` float texels (may be
+    /// filter, mag filter, wrap s, wrap t, flags (1 depth compare, 2 make mipmaps). `data` float texels (may be
     /// empty: storage only).
     pub fn texture(&mut self, id: i64, params: &Vec<i64>, data: &Vec<f64>) {
         self.op(OP_TEXTURE);

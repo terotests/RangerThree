@@ -7,6 +7,7 @@
 // for OpenGL ES 3 / GL 3.3.
 //
 //   var gpu = new GpuWebGL2(gl);
+//   GpuWebGL2.uploadImages(renderer, scene, decode);   // texture pixels the crate asks for
 //   gpu.run(frame.commands);          // a GpuCommands (ints, floats, texts, bytes)
 (function (root) {
   "use strict";
@@ -65,15 +66,17 @@
           obj[pid] = { prog: p, locs: locs };
           break;
         }
-        case 3: { // TEXTURE id, cube, internal, format, type, w, h, min, mag, wrap s, wrap t, compare, data, offset, n
+        case 3: { // TEXTURE id, cube, internal, format, type, w, h, min, mag, wrap s, wrap t, flags, data, offset, n
           var tid = ints[i], cube = ints[i + 1] === 1, internal = ints[i + 2], format = ints[i + 3], type = ints[i + 4];
           var w = ints[i + 5], h = ints[i + 6], dk = ints[i + 12], off = ints[i + 13], dn = ints[i + 14];
           var tgt = cube ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_2D, px = null;
           if (dk === 1) { px = floats.subarray(f, f + dn); f += dn; }
-          else if (dk === 2) px = bytes.subarray(off, off + dn);
+          // WebGL takes no view of a resizable buffer (the crate's growable Vec<u8>): copy then
+          else if (dk === 2) px = bytes.buffer.resizable ? bytes.slice(off, off + dn) : bytes.subarray(off, off + dn);
           var t = obj[tid] ? obj[tid].tex : gl.createTexture();
           gl.bindTexture(tgt, t);
           gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+          gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
           gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
           if (cube) for (var face = 0; face < 6; face++) gl.texImage2D(gl.TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, internal, w, h, 0, format, type, px);
           else gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, px);
@@ -81,10 +84,11 @@
           gl.texParameteri(tgt, gl.TEXTURE_MAG_FILTER, ints[i + 8]);
           gl.texParameteri(tgt, gl.TEXTURE_WRAP_S, ints[i + 9]);
           gl.texParameteri(tgt, gl.TEXTURE_WRAP_T, ints[i + 10]);
-          if (ints[i + 11] === 1) {
+          if (ints[i + 11] & 1) {
             gl.texParameteri(tgt, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
             gl.texParameteri(tgt, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
           }
+          if (ints[i + 11] & 2) gl.generateMipmap(tgt);
           gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
           gl.bindTexture(tgt, null);
           obj[tid] = { tex: t };
@@ -191,6 +195,20 @@
       }
     }
     if (f !== floats.length) throw new Error("gpu-webgl2: " + (floats.length - f) + " floats left over");
+  };
+
+  // Hands the crate's GpuRenderer the pixels of the textures it names
+  // (textures_to_upload), decoded by `decode(image, texture)` -> { width,
+  // height, data: RGBA bytes, rows from the top } or null while not ready
+  // (THREE.WebGLRenderer.decodeImage: data textures, images, canvases).
+  GpuWebGL2.uploadImages = function (renderer, scene, decode) {
+    var list = renderer.textures_to_upload(scene);
+    for (var k = 0; k < list.length; k++) {
+      var tex = list[k], px = decode(tex.image, tex);
+      if (!px) continue;
+      var d = px.data, buf = { byteLength: d.byteLength, _view: new DataView(d.buffer, d.byteOffset, d.byteLength) };
+      renderer.set_texture_image(tex.id, tex.version, px.width, px.height, buf);
+    }
   };
 
   function compile(gl, type, src) {

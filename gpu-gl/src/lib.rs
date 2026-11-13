@@ -145,7 +145,7 @@ impl Player {
                         self.objs.insert(pid, Obj::Program { prog: p, locs });
                     }
                     3 => {
-                        // TEXTURE id, cube, internal, format, type, w, h, min, mag, wrap s, wrap t, compare, data, offset, n
+                        // TEXTURE id, cube, internal, format, type, w, h, min, mag, wrap s, wrap t, flags, data, offset, n
                         let a = ints.get(i..i + 15).ok_or("gpu-gl: texture command cut")?;
                         i += 15;
                         let (tid, cube) = (a[0], a[1] == 1);
@@ -182,9 +182,12 @@ impl Player {
                         (gl.TexParameteri)(tgt, TEXTURE_MAG_FILTER, a[8] as GLint);
                         (gl.TexParameteri)(tgt, TEXTURE_WRAP_S, a[9] as GLint);
                         (gl.TexParameteri)(tgt, TEXTURE_WRAP_T, a[10] as GLint);
-                        if a[11] == 1 {
+                        if a[11] & 1 != 0 {
                             (gl.TexParameteri)(tgt, TEXTURE_COMPARE_MODE, COMPARE_REF_TO_TEXTURE);
                             (gl.TexParameteri)(tgt, TEXTURE_COMPARE_FUNC, LEQUAL);
+                        }
+                        if a[11] & 2 != 0 {
+                            (gl.GenerateMipmap)(tgt);
                         }
                         (gl.PixelStorei)(UNPACK_ALIGNMENT, 4);
                         (gl.BindTexture)(tgt, 0);

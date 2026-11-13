@@ -117,6 +117,13 @@ impl<'a> Parser<'a> {
     }
 }
 
+fn opt_field<'a>(o: &'a J, k: &str) -> Option<&'a J> {
+    match o {
+        J::Obj(v) => v.iter().find(|(n, _)| n == k).map(|x| &x.1),
+        _ => None,
+    }
+}
+
 fn field<'a>(o: &'a J, k: &str) -> &'a J {
     match o {
         J::Obj(v) => &v.iter().find(|(n, _)| n == k).unwrap_or_else(|| panic!("no field {}", k)).1,
@@ -165,6 +172,7 @@ fn main() {
             let ints: Vec<i64> = arr(field(&j, "ints")).iter().map(|v| num(v) as i64).collect();
             let floats: Vec<f32> = arr(field(&j, "floats")).iter().map(|v| num(v) as f32).collect();
             let texts: Vec<String> = arr(field(&j, "texts")).iter().map(|v| if let J::Str(s) = v { s.clone() } else { String::new() }).collect();
+            let bytes: Vec<u8> = opt_field(&j, "bytes").map(|b| arr(b).iter().map(|v| num(v) as u8).collect()).unwrap_or_default();
             let want = std::fs::read(file.with_extension("rgba")).unwrap();
             let ctx = match Headless::new(w, h, desktop) {
                 Ok(c) => c,
@@ -180,7 +188,7 @@ fn main() {
             }
             total += 1;
             let t0 = Instant::now();
-            if let Err(e) = player.run(&ints, &floats, &texts, &[]) {
+            if let Err(e) = player.run(&ints, &floats, &texts, &bytes) {
                 println!("FAIL  {}: {}", name, e);
                 continue;
             }

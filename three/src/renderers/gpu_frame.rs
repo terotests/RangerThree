@@ -4,13 +4,20 @@
 //! later WebGPU) draws the same pixels without frame logic of its own.
 //!
 //! Covered so far: meshes, instanced meshes, lines and points with every
-//! material kind the main program shades, without textures; all light
+//! material kind the main program shades and its texture maps; all light
 //! kinds except rect area lights; fog, tone mapping, output colour space,
 //! blending, sides, wireframe, draw ranges and groups. A frame that needs
-//! more (a texture, an environment, shadow maps, transmission, sprites,
-//! dashed lines, morph targets, a texture background) is reported in
-//! `GpuFrame::missing`, and the host draws it with the WebGL2 backend until
-//! those parts move here too.
+//! more (an environment, shadow maps, transmission, sprites, dashed lines,
+//! morph targets, a texture background) is reported in `GpuFrame::missing`,
+//! and the host draws it with the WebGL2 backend until those parts move
+//! here too.
+//!
+//! Texture pixels come from the host, which decodes images its own way (the
+//! browser's image and canvas decoders, a native PNG decoder, a canvas 2D
+//! raster): `textures_to_upload` names the textures whose pixels are not
+//! here at their current version, `set_texture_image` hands them over
+//! (RGBA8, rows from the top), and `upload_images` does both for textures
+//! whose `image` the crate holds (Rust hosts).
 
 use ranger::prelude::*;
 
@@ -22,6 +29,9 @@ use crate::renderers::dfg_table::dfg_table;
 use crate::renderers::gpu::{GpuCommands, U_FLOAT, U_MAT3, U_MAT4, U_VEC2, U_VEC3, U_VEC4};
 use crate::renderers::plan::{material_uniforms, map_transform, plan_frame, shadow_plans, DrawItem, LIGHT_STRIDE};
 use crate::renderers::shaders::{key_names, main_fragment, main_vertex, uniform_names, MAX_LIGHTS};
+use crate::core::object3d::visible_descendants;
+use crate::maths::color::ColorSpace;
+use crate::textures::texture::TextureRef;
 
 // GL constants the stream carries
 const GL_POINTS: i64 = 0;
@@ -92,6 +102,22 @@ struct BufferEntry {
     length: i64,
 }
 
+/// A texture made on the GPU: its id there and the upload it holds.
+#[derive(Clone)]
+struct TextureEntry {
+    id: i64,
+    key: String,
+}
+
+/// Pixels the host handed over for a texture.
+#[derive(Clone)]
+struct HostImage {
+    version: i64,
+    width: i64,
+    height: i64,
+    data: Vec<u8>,
+}
+
 #[derive(Clone)]
 struct ProgramEntry {
     id: i64,
@@ -105,6 +131,12 @@ pub struct GpuRenderer {
     frame: i64,
     buffers: Map<String, BufferEntry>,
     programs: Map<String, ProgramEntry>,
+    textures: Map<i64, TextureEntry>,
+    /// the next id given to an object, geometry or texture that has none (0)
+    auto_id: i64,
+    images: Map<i64, HostImage>,
+    /// the extra maps' uv transforms, 6 mat3 (u_t)
+    map_t: Vec<f64>,
     names: Vec<String>,
     dfg: i64,
     shadow_flat: i64,
@@ -173,21 +205,77 @@ fn clamp01(x: f64) -> f64 {
 }
 
 /// The textures `m` samples (the command renderer draws none yet).
-fn has_textures(m: &Material) -> bool {
-    m.map.is_some()
-        || m.alpha_map.is_some()
-        || m.ao_map.is_some()
-        || m.light_map.is_some()
-        || m.emissive_map.is_some()
-        || m.bump_map.is_some()
-        || m.normal_map.is_some()
-        || m.displacement_map.is_some()
-        || m.specular_map.is_some()
-        || m.env_map.is_some()
-        || m.roughness_map.is_some()
-        || m.metalness_map.is_some()
-        || m.gradient_map.is_some()
-        || m.matcap.is_some()
+/// The maps the main program samples (`material_map` k), in this order: map, emissive map,
+/// then the extra maps of `EXTRA_MAPS`, then the displacement map. Light
+/// and specular maps are not drawn by the WebGL2 backend either.
+const MAP_COUNT: i64 = 11;
+
+/// Ids this renderer gives start here, far above the JS facade's counters.
+const AUTO_ID_BASE: i64 = 1000000000000;
+
+fn material_map(m: &Material, k: i64) -> Option<TextureRef> {
+    match k {
+        0 => m.map.clone(),
+        1 => m.emissive_map.clone(),
+        2 => m.alpha_map.clone(),
+        3 => m.roughness_map.clone(),
+        4 => m.metalness_map.clone(),
+        5 => m.normal_map.clone(),
+        6 => m.ao_map.clone(),
+        7 => m.matcap.clone(),
+        8 => m.gradient_map.clone(),
+        9 => m.bump_map.clone(),
+        10 => m.displacement_map.clone(),
+        _ => None,
+    }
+}
+
+/// The extra maps (material_maps 2..9): texture unit, bit in u_maps, slot
+/// in u_t (-1 none). Matcap, gradient and bump maps share units with maps
+/// their materials cannot have at once.
+const EXTRA_UNITS: [i64; 8] = [3, 4, 5, 6, 7, 4, 5, 6];
+const EXTRA_BITS: [i64; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
+const EXTRA_SLOTS: [i64; 8] = [0, 1, 2, 3, 4, -1, -1, 5];
+
+/// A texture's uv transform (its matrix, recomputed when it updates itself).
+fn texture_matrix(t: &TextureRef) -> Vec<f64> {
+    let tb = t.borrow();
+    let mut mat = tb.matrix;
+    if tb.matrix_auto_update {
+        mat.set_uv_transform(tb.offset.x, tb.offset.y, tb.repeat.x, tb.repeat.y, tb.rotation, tb.center.x, tb.center.y);
+    }
+    let mut out: Vec<f64> = Vec::new();
+    for i in 0..9 {
+        out.push(mat.elements[i]);
+    }
+    out
+}
+
+/// three.js filter and wrap constants as GL's.
+fn gl_filter(f: i64) -> i64 {
+    if f == 1003 {
+        9728
+    } else if f == 1004 {
+        9984
+    } else if f == 1005 {
+        9986
+    } else if f == 1007 {
+        9985
+    } else if f == 1008 {
+        9987
+    } else {
+        9729
+    }
+}
+
+fn gl_wrap(w: i64) -> i64 {
+    if w == 1000 {
+        10497
+    } else if w == 1002 {
+        33648
+    } else {
+        33071
+    }
 }
 
 impl GpuRenderer {
@@ -197,6 +285,10 @@ impl GpuRenderer {
             frame: 0,
             buffers: Map::new(),
             programs: Map::new(),
+            textures: Map::new(),
+            auto_id: AUTO_ID_BASE,
+            images: Map::new(),
+            map_t: vec![0.0; 54],
             names: uniform_names(),
             dfg: 0,
             shadow_flat: 0,
@@ -287,6 +379,181 @@ impl GpuRenderer {
     }
 
     /// The samplers' texture units (as three-webgl.js setUnits).
+    /// Hands over a texture's pixels: RGBA8, `width` x `height`, rows from the top.
+    pub fn set_texture_image(&mut self, texture_id: i64, version: i64, width: i64, height: i64, data: Vec<u8>) {
+        self.images.insert(texture_id, HostImage { version, width, height, data });
+    }
+
+    /// The version of the pixels held for a texture id, -1 when none.
+    pub fn texture_image_version(&self, texture_id: i64) -> i64 {
+        match self.images.get(&texture_id) {
+            Some(im) => im.version,
+            None => -1,
+        }
+    }
+
+    /// Forgets a texture's pixels and its GPU texture (the host disposed it).
+    pub fn remove_texture(&mut self, c: &mut GpuCommands, texture_id: i64) {
+        self.images.remove(&texture_id);
+        let mut gpu_id: i64 = 0;
+        if let Some(e) = self.textures.get(&texture_id) {
+            gpu_id = e.id;
+        }
+        if gpu_id != 0 {
+            self.textures.remove(&texture_id);
+            c.release(gpu_id);
+        }
+    }
+
+    /// Gives an id to every object, geometry and map texture under `scene`
+    /// that has none (0), since the caches key on them. The JS facade
+    /// numbers its own as three.js does; objects made in Rust start at 0,
+    /// so Rust hosts call this (through `upload_images`) before `render`.
+    pub fn assign_ids(&mut self, scene: &ObjectRef) {
+        for o in visible_descendants(scene).iter() {
+            if o.borrow().id == 0 {
+                o.borrow_mut().id = self.auto_id;
+                self.auto_id += 1;
+            }
+            let ob = o.borrow();
+            let data = match &ob.kind {
+                ObjectKind::Mesh(d) => d.clone(),
+                ObjectKind::InstancedMesh(d) => d.clone(),
+                ObjectKind::Points(d) => d.clone(),
+                ObjectKind::Line(d) => d.clone(),
+                ObjectKind::LineSegments(d) => d.clone(),
+                ObjectKind::LineLoop(d) => d.clone(),
+                _ => continue,
+            };
+            if data.geometry.borrow().id == 0 {
+                data.geometry.borrow_mut().id = self.auto_id;
+                self.auto_id += 1;
+            }
+            for m in data.materials.iter() {
+                for k in 0..MAP_COUNT {
+                    if let Some(t) = material_map(&m.borrow(), k) {
+                        if t.borrow().id == 0 {
+                            t.borrow_mut().id = self.auto_id;
+                            self.auto_id += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The textures of the scene's visible materials whose pixels are not
+    /// held at their current version; the host decodes each and calls
+    /// `set_texture_image` before `render`.
+    pub fn textures_to_upload(&self, scene: &ObjectRef) -> Vec<TextureRef> {
+        let mut out: Vec<TextureRef> = Vec::new();
+        let mut seen: Vec<i64> = Vec::new();
+        for o in visible_descendants(scene).iter() {
+            let ob = o.borrow();
+            let data = match &ob.kind {
+                ObjectKind::Mesh(d) => d.clone(),
+                ObjectKind::InstancedMesh(d) => d.clone(),
+                ObjectKind::Points(d) => d.clone(),
+                ObjectKind::Line(d) => d.clone(),
+                ObjectKind::LineSegments(d) => d.clone(),
+                ObjectKind::LineLoop(d) => d.clone(),
+                _ => continue,
+            };
+            for m in data.materials.iter() {
+                for k in 0..MAP_COUNT {
+                    if let Some(t) = material_map(&m.borrow(), k) {
+                        let id = t.borrow().id;
+                        let version = t.borrow().version;
+                        if !seen.contains(&id) {
+                            seen.push(id);
+                            if self.texture_image_version(id) != version {
+                                out.push(t.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// For Rust hosts, before each `render`: numbers what has no id
+    /// (`assign_ids`) and hands over the pixels of every texture
+    /// `textures_to_upload` names from the texture's own `image`.
+    pub fn upload_images(&mut self, scene: &ObjectRef) {
+        self.assign_ids(scene);
+        for t in self.textures_to_upload(scene).iter() {
+            let tb = t.borrow();
+            if let Some(im) = &tb.image {
+                let img = im.borrow();
+                self.set_texture_image(tb.id, tb.version, img.width, img.height, img.data.clone());
+            }
+        }
+    }
+
+    /// Binds texture `t` to `unit`, uploading it when its pixels or
+    /// parameters changed; false when its pixels are not here (the map is
+    /// then left out, as the WebGL2 backend does for an image still loading).
+    fn texture(&mut self, c: &mut GpuCommands, t: &TextureRef, unit: i64) -> bool {
+        let tb = t.borrow();
+        let mut width: i64 = 0;
+        let mut height: i64 = 0;
+        let mut version: i64 = 0;
+        let mut found = false;
+        if let Some(im) = self.images.get(&tb.id) {
+            width = im.width;
+            height = im.height;
+            version = im.version;
+            found = true;
+        }
+        if !found {
+            return false;
+        }
+        let srgb = tb.color_space == ColorSpace::Srgb;
+        let mip = tb.min_filter != 1003 && tb.min_filter != 1006 && tb.generate_mipmaps;
+        let mut min = gl_filter(tb.min_filter);
+        if !mip {
+            min = if min == 9728 || min == 9984 || min == 9986 { 9728 } else { 9729 };
+        }
+        let mag = if tb.mag_filter == 1003 { 9728 } else { 9729 };
+        let params: Vec<i64> = vec![
+            0,
+            if srgb { 35907 } else { 6408 },
+            6408,
+            5121,
+            width,
+            height,
+            min,
+            mag,
+            gl_wrap(tb.wrap_s),
+            gl_wrap(tb.wrap_t),
+            if mip { 2 } else { 0 },
+        ];
+        let mut key = version.to_string() + if tb.flip_y { ":f" } else { ":-" } + if tb.premultiply_alpha { "p" } else { "-" };
+        for p in params.iter() {
+            key = key + ":" + &p.to_string();
+        }
+        let mut id: i64 = 0;
+        let mut same = false;
+        if let Some(e) = self.textures.get(&tb.id) {
+            id = e.id;
+            same = e.key == key;
+        }
+        if id == 0 {
+            id = self.id();
+        }
+        if !same {
+            let mut rows: Vec<u8> = Vec::new();
+            if let Some(im) = self.images.get(&tb.id) {
+                rows = texture_rows(im, tb.flip_y, tb.premultiply_alpha);
+            }
+            c.texture_bytes(id, &params, &rows);
+            self.textures.insert(tb.id, TextureEntry { id, key });
+        }
+        c.bind(unit, id, false);
+        true
+    }
+
     fn set_units(&self, c: &mut GpuCommands) {
         let units: Vec<String> = vec![
             String::from("u_map"),
@@ -518,8 +785,8 @@ impl GpuRenderer {
         let o = item.object.borrow();
         let kind = item.kind;
         let mesh = kind == 1 || kind == 2;
-        if has_textures(&m) {
-            frame.missing.push(String::from("textures"));
+        if m.env_map.is_some() {
+            frame.missing.push(String::from("environment map"));
             return;
         }
         if m.kind == MaterialKind::LineDashed {
@@ -615,6 +882,47 @@ impl GpuRenderer {
             }
             c.attrib(8, 0, 3, 0, 0, 0, &vec![1.0, 1.0, 1.0, 1.0]);
         }
+        // texture maps
+        let mut disp_t: Vec<f64> = Vec::new();
+        let mut has_disp = false;
+        if mesh {
+            if let Some(t) = &material_map(&m, 10) {
+                has_disp = self.texture(c, t, 12);
+                if has_disp {
+                    disp_t = texture_matrix(t);
+                }
+            }
+        }
+        let mut has_map = false;
+        if let Some(t) = &material_map(&m, 0) {
+            has_map = self.texture(c, t, 0);
+        }
+        let mut has_emap = false;
+        let mut emap_t: Vec<f64> = Vec::new();
+        if let Some(t) = &material_map(&m, 1) {
+            has_emap = self.texture(c, t, 1);
+            if has_emap {
+                emap_t = texture_matrix(t);
+            }
+        }
+        let mut bits: i64 = 0;
+        for k in 0..8 {
+            if let Some(t) = &material_map(&m, (k + 2) as i64) {
+                if EXTRA_BITS[k] == 128 && m.normal_map.is_some() {
+                    continue;
+                }
+                if !self.texture(c, t, EXTRA_UNITS[k]) {
+                    continue;
+                }
+                bits |= EXTRA_BITS[k];
+                if EXTRA_SLOTS[k] >= 0 {
+                    let tm = texture_matrix(t);
+                    for j in 0..9 {
+                        self.map_t[(EXTRA_SLOTS[k] as usize) * 9 + j] = tm[j];
+                    }
+                }
+            }
+        }
         let points_uv = if kind == 6 && !has_uv { 1 } else { 0 };
         let opaque = !m.transparent && m.blending == Blending::Normal;
         let physical = if mu[22] > 0.5 { 1 } else { 0 };
@@ -622,19 +930,19 @@ impl GpuRenderer {
         let lit = mu[13] > 0.5;
         // the program variant, in key_names order
         let mut vals: Vec<i64> = vec![
-            0,
+            if has_map { 1 } else { 0 },
             points_uv,
             if has_normal { 1 } else { 0 },
             if opaque { 1 } else { 0 },
             if m.tone_mapped { s.tone_mapping } else { 0 },
-            0,
+            bits,
             if s.output_linear { 1 } else { 0 },
             if m.premultiplied_alpha { 1 } else { 0 },
-            0,
+            if has_emap { 1 } else { 0 },
             0,
             0,
             if instances > 0 { 1 } else { 0 },
-            0,
+            if has_disp { 1 } else { 0 },
             0,
             mu[15] as i64,
             if lit { 1 } else { 0 },
@@ -662,7 +970,12 @@ impl GpuRenderer {
         c.uniform(self.loc("u_normalMat"), U_MAT3, &normal_matrix(&o.matrix_world.elements));
         c.uniform(self.loc("u_uvt"), U_MAT3, &map_transform(&m));
         c.uniform(self.loc("u_dashScale"), U_FLOAT, &vec![0.0]);
-        c.uniform_int(self.loc("u_hasDisp"), 0);
+        if has_disp {
+            c.uniform(self.loc("u_dispT"), U_MAT3, &disp_t);
+            c.uniform(self.loc("u_dispScale"), U_FLOAT, &vec![m.displacement_scale]);
+            c.uniform(self.loc("u_dispBias"), U_FLOAT, &vec![m.displacement_bias]);
+        }
+        c.uniform_int(self.loc("u_hasDisp"), if has_disp { 1 } else { 0 });
         c.uniform(self.loc("u_bumpScale"), U_FLOAT, &vec![m.bump_scale]);
         if sheen_on == 1 {
             let sr = if m.sheen_roughness < 0.0001 {
@@ -679,6 +992,13 @@ impl GpuRenderer {
         c.uniform(self.loc("u_trans"), U_VEC4, &vec![0.0, 0.0, 0.0, 0.0]);
         c.uniform_int(self.loc("u_instanced"), if instances > 0 { 1 } else { 0 });
         c.uniform_int(self.loc("u_sprite"), 0);
+        if has_emap {
+            c.uniform(self.loc("u_euvt"), U_MAT3, &emap_t);
+        }
+        if bits != 0 {
+            let mt = self.map_t.clone();
+            c.uniform(self.loc("u_t"), U_MAT3, &mt);
+        }
         let flip = if mu[16] == 1.0 { -1.0 } else { 1.0 };
         c.uniform(self.loc("u_normalScale"), U_VEC2, &vec![m.normal_scale.x * flip, m.normal_scale.y * flip]);
         c.uniform(self.loc("u_aoIntensity"), U_FLOAT, &vec![m.ao_map_intensity]);
@@ -869,6 +1189,34 @@ fn first_material(o: &ObjectRef) -> Option<MaterialRef> {
         }
         _ => None,
     }
+}
+
+/// The host's rows (top first) as GL takes them (bottom first) when the
+/// texture flips, as WebGL's UNPACK_FLIP_Y; alpha premultiplied when asked.
+fn texture_rows(img: &HostImage, flip_y: bool, premultiply: bool) -> Vec<u8> {
+    let w = img.width as usize;
+    let h = img.height as usize;
+    let row = w * 4;
+    let mut out: Vec<u8> = vec![0; row * h];
+    for y in 0..h {
+        let src = if flip_y { (h - 1 - y) * row } else { y * row };
+        for x in 0..row {
+            if src + x < img.data.len() {
+                out[y * row + x] = img.data[src + x];
+            }
+        }
+    }
+    if premultiply {
+        let mut i = 0;
+        while i + 3 < out.len() {
+            let a = out[i + 3] as f64 / 255.0;
+            for k in 0..3 {
+                out[i + k] = (out[i + k] as f64 * a).round() as u8;
+            }
+            i += 4;
+        }
+    }
+    out
 }
 
 fn dedup(v: Vec<String>) -> Vec<String> {
