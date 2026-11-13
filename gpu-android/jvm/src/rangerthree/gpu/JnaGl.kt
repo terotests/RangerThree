@@ -31,6 +31,9 @@ interface GLES : Library {
     fun glDeleteProgram(p: Int)
     fun glUseProgram(p: Int)
     fun glGetUniformLocation(p: Int, name: String): Int
+    fun glGetUniformBlockIndex(p: Int, name: String): Int
+    fun glUniformBlockBinding(p: Int, index: Int, binding: Int)
+    fun glBindBufferRange(target: Int, index: Int, b: Int, offset: Long, size: Long)
     fun glUniform1i(loc: Int, v: Int)
     fun glUniform1fv(loc: Int, count: Int, v: FloatArray)
     fun glUniform2fv(loc: Int, count: Int, v: FloatArray)
@@ -122,6 +125,9 @@ class JnaGl : Gl {
     override fun deleteProgram(p: Int) = g.glDeleteProgram(p)
     override fun useProgram(p: Int) = g.glUseProgram(p)
     override fun getUniformLocation(p: Int, name: String): Int = g.glGetUniformLocation(p, name)
+    override fun getUniformBlockIndex(p: Int, name: String): Int = g.glGetUniformBlockIndex(p, name)
+    override fun uniformBlockBinding(p: Int, index: Int, binding: Int) = g.glUniformBlockBinding(p, index, binding)
+    override fun bindBufferRange(target: Int, index: Int, b: Int, offset: Int, bytes: Int) = g.glBindBufferRange(target, index, b, offset.toLong(), bytes.toLong())
     override fun uniform1i(loc: Int, v: Int) = g.glUniform1i(loc, v)
     override fun uniform1fv(loc: Int, count: Int, v: FloatArray, offset: Int) = g.glUniform1fv(loc, count, slice(v, offset, count))
     override fun uniform2fv(loc: Int, count: Int, v: FloatArray, offset: Int) = g.glUniform2fv(loc, count, slice(v, offset, count * 2))
