@@ -204,7 +204,7 @@ struct EnvEntry {
 /// the depth texture and its targets (six faces for a cube), and for VSM
 /// the blur's two colour textures and targets.
 #[derive(Clone)]
-struct ShadowRes {
+pub struct ShadowRes {
     w: i64,
     h: i64,
     kind: i64,
@@ -241,7 +241,7 @@ struct EnvUse {
 
 /// Pixels the host handed over for a texture.
 #[derive(Clone)]
-struct HostImage {
+pub struct HostImage {
     version: i64,
     width: i64,
     height: i64,
