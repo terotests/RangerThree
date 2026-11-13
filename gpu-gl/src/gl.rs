@@ -42,6 +42,7 @@ pub const FRAMEBUFFER: GLenum = 0x8D40;
 pub const READ_FRAMEBUFFER: GLenum = 0x8CA8;
 pub const DRAW_FRAMEBUFFER: GLenum = 0x8CA9;
 pub const DEPTH32F_STENCIL8: GLenum = 0x8CAD;
+pub const NONE: GLenum = 0;
 pub const RENDERBUFFER: GLenum = 0x8D41;
 pub const COLOR_ATTACHMENT0: GLenum = 0x8CE0;
 pub const DEPTH_ATTACHMENT: GLenum = 0x8D00;
@@ -127,6 +128,8 @@ gl_api! {
     BlitFramebuffer: fn(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
     RenderbufferStorageMultisample: fn(GLenum, GLsizei, GLenum, GLsizei, GLsizei);
     DeleteRenderbuffers: fn(GLsizei, *const GLuint);
+    DrawBuffers: fn(GLsizei, *const GLenum);
+    ReadBuffer: fn(GLenum);
     CheckFramebufferStatus: fn(GLenum) -> GLenum;
     GenRenderbuffers: fn(GLsizei, *mut GLuint);
     BindRenderbuffer: fn(GLenum, GLuint);

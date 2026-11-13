@@ -28,7 +28,7 @@ use crate::maths::matrix4::Matrix4;
 use crate::renderers::dfg_table::dfg_table;
 use crate::renderers::gpu::{GpuCommands, U_FLOAT, U_MAT3, U_MAT4, U_VEC2, U_VEC3, U_VEC4};
 use crate::renderers::plan::{material_uniforms, map_transform, plan_frame, shadow_plans, DrawItem, LIGHT_STRIDE};
-use crate::renderers::shaders::{background_fs, full_vs, key_names, main_fragment, main_vertex, pmrem_fs, uniform_names, MAX_LIGHTS};
+use crate::renderers::shaders::{background_fs, full_vs, key_names, main_fragment, main_vertex, pmrem_fs, uniform_names, vsm_blur_fs, MAX_LIGHTS};
 use crate::core::object3d::visible_descendants;
 use crate::maths::color::ColorSpace;
 use crate::maths::euler::{Euler, EulerOrder};
@@ -70,6 +70,8 @@ pub struct GpuSettings {
     /// half-float textures can be drawn into (WebGL2: EXT_color_buffer_float);
     /// the prefiltered environment is kept in RGBA16F then, else RGBA8
     pub half_float: bool,
+    /// shadowMap.type: 0 basic, 1 PCF, 2 PCF soft (drawn as PCF), 3 VSM
+    pub shadow_type: i64,
 }
 
 impl GpuSettings {
@@ -85,6 +87,7 @@ impl GpuSettings {
             clear_alpha: 1.0,
             shadows: false,
             half_float: false,
+            shadow_type: 1,
         }
     }
 }
@@ -127,6 +130,27 @@ struct EnvEntry {
     atlas: i64,
     aw: i64,
     ah: i64,
+}
+
+/// A shadow slot's GPU objects (2D slots 0-2, the point light's cube 3):
+/// the depth texture and its targets (six faces for a cube), and for VSM
+/// the blur's two colour textures and targets.
+#[derive(Clone)]
+struct ShadowRes {
+    w: i64,
+    h: i64,
+    kind: i64,
+    point: bool,
+    depth: i64,
+    targets: Vec<i64>,
+    pass: i64,
+    pass_t: i64,
+    map: i64,
+    map_t: i64,
+}
+
+fn no_shadow_res() -> ShadowRes {
+    ShadowRes { w: 0, h: 0, kind: 0, point: false, depth: 0, targets: Vec::new(), pass: 0, pass_t: 0, map: 0, map_t: 0 }
 }
 
 /// The environment a draw uses: its texture, whether it is prefiltered
@@ -175,6 +199,19 @@ pub struct GpuRenderer {
     scene_env_rotation: Euler,
     /// u_envUV, u_env and u_envRot of the draw's environment (env_bind)
     env_vals: Vec<f64>,
+    /// the frame uniforms' version: programs that saw an older one get them again
+    fver: i64,
+    /// shadow map type of the frame's programs (1 PCF, 2 basic, 3 VSM) and the pass being drawn (0: the screen)
+    stype: i64,
+    shadow_pass: i64,
+    has_shadows: bool,
+    /// per slot; depth 0: not made yet
+    shadow_res: Vec<ShadowRes>,
+    /// u_shMat, u_shParam, u_shSize (empty until a frame had shadows)
+    shadow_mat: Vec<f64>,
+    shadow_param: Vec<f64>,
+    shadow_size: Vec<f64>,
+    vsm_prog: i64,
     names: Vec<String>,
     dfg: i64,
     shadow_flat: i64,
@@ -368,6 +405,15 @@ impl GpuRenderer {
             scene_env_intensity: 1.0,
             scene_env_rotation: Euler::new(0.0, 0.0, 0.0, EulerOrder::Xyz),
             env_vals: Vec::new(),
+            fver: 0,
+            stype: 1,
+            shadow_pass: 0,
+            has_shadows: false,
+            shadow_res: vec![no_shadow_res(), no_shadow_res(), no_shadow_res(), no_shadow_res()],
+            shadow_mat: Vec::new(),
+            shadow_param: Vec::new(),
+            shadow_size: Vec::new(),
+            vsm_prog: 0,
             names: uniform_names(),
             dfg: 0,
             shadow_flat: 0,
@@ -432,7 +478,7 @@ impl GpuRenderer {
     /// The main program of a variant, made on first use; sets the frame's
     /// uniforms when the program has not had them this frame.
     fn use_main(&mut self, c: &mut GpuCommands, vals: &Vec<i64>) {
-        let mut key = String::from("1");
+        let mut key = self.stype.to_string();
         for v in vals.iter() {
             key.push_str(",");
             key.push_str(&v.to_string());
@@ -445,16 +491,16 @@ impl GpuRenderer {
         }
         if id == 0 {
             id = self.id();
-            c.program(id, &main_vertex(vals), &main_fragment(1, vals), &self.names);
+            c.program(id, &main_vertex(vals), &main_fragment(self.stype, vals), &self.names);
             c.use_program(id);
             self.set_units(c);
         } else {
             c.use_program(id);
         }
-        if seen != self.frame {
+        if seen != self.fver {
             self.frame_uniforms(c);
         }
-        self.programs.insert(key, ProgramEntry { id, frame: self.frame });
+        self.programs.insert(key, ProgramEntry { id, frame: self.fver });
     }
 
     /// Hands over a texture's pixels: RGBA8, `width` x `height`, rows from the top.
@@ -1059,6 +1105,253 @@ impl GpuRenderer {
         c.uniform(self.loc("u_fog"), U_VEC4, &vec![f[51], f[52], f[53], f[54], f[55], f[56], f[57], f[58]]);
         c.uniform(self.loc("u_pointScale"), U_FLOAT, &vec![f[59]]);
         c.uniform(self.loc("u_exposure"), U_FLOAT, &vec![f[60]]);
+        if !self.shadow_mat.is_empty() {
+            c.uniform(self.loc("u_shMat"), U_MAT4, &self.shadow_mat);
+            c.uniform(self.loc("u_shParam"), U_VEC4, &self.shadow_param);
+            c.uniform(self.loc("u_shSize"), U_VEC4, &self.shadow_size);
+        }
+    }
+
+    /// Every shadow sampler needs a texture of its kind bound even when no
+    /// light uses it, and none may hold a map being rendered: 1x1 compared
+    /// depth textures for PCF and basic, nothing for VSM's plain samplers.
+    fn bind_shadow_dummies(&self, c: &mut GpuCommands, kind: i64) {
+        let units: Vec<i64> = vec![8, 9, 13, 15];
+        for i in 0..4 {
+            c.bind(units[i], 0, false);
+            c.bind(units[i], 0, true);
+            if kind != 3 {
+                if i == 3 {
+                    c.bind(15, self.shadow_cube, true);
+                } else {
+                    c.bind(units[i], self.shadow_flat, false);
+                }
+            }
+        }
+    }
+
+    /// The frame's shadow maps (three.js's WebGLShadowMap): depth from each
+    /// shadow camera of the casters, point lights into six cube faces, VSM
+    /// blurred. Returns each light's slot (2D 0-2, the point light 3; -1 none).
+    #[allow(clippy::too_many_arguments)]
+    fn render_shadows(&mut self, c: &mut GpuCommands, scene: &ObjectRef, items: &Vec<DrawItem>, kind: i64, s: &GpuSettings, missing: &mut Vec<String>) -> Vec<i64> {
+        let mut slots: Vec<i64> = vec![-1; MAX_LIGHTS as usize];
+        let plans = shadow_plans(scene);
+        if plans.is_empty() {
+            return slots;
+        }
+        let mut casters: Vec<DrawItem> = Vec::new();
+        for it in items.iter() {
+            let ob = it.object.borrow();
+            if it.kind >= 1 && it.kind <= 6 && (ob.cast_shadow || (kind == 3 && ob.receive_shadow)) {
+                casters.push(it.clone());
+            }
+        }
+        if self.shadow_mat.is_empty() {
+            self.shadow_mat = vec![0.0; 64];
+            self.shadow_param = vec![0.0; 16];
+            self.shadow_size = vec![0.0; 16];
+        }
+        let base = self.frame_floats.clone();
+        let saved_ints = self.frame_ints.clone();
+        self.frame_ints = vec![0];
+        self.shadow_pass = kind;
+        let mut next2d: i64 = 0;
+        let mut used_point = false;
+        let mut frame = GpuFrame { commands: GpuCommands::new(), missing: Vec::new(), calls: 0, triangles: 0, lines: 0, points: 0 };
+        for sp in plans.iter() {
+            let point = sp.kind == 3;
+            let mut slot: i64 = 0;
+            if point {
+                if used_point || kind == 3 {
+                    continue;
+                }
+                slot = 3;
+                used_point = true;
+            } else {
+                if next2d > 2 {
+                    continue;
+                }
+                slot = next2d;
+                next2d += 1;
+            }
+            let w = sp.map_width as i64;
+            let h = sp.map_height as i64;
+            let res = self.shadow_target(c, slot, w, h, kind, point, s.half_float);
+            let faces = if point { 6 } else { 1 };
+            let fw = w;
+            let fh = if point { w } else { h };
+            for f in 0..faces {
+                c.pass(res.targets[f as usize], fw, fh, 2, &vec![0.0, 0.0, 0.0, 0.0], 1.0);
+                // this face's view and the shadow camera's projection
+                let mut ff: Vec<f64> = elements(&sp.views[f as usize]);
+                for i in 16..32 {
+                    ff.push(base[i]);
+                }
+                for x in elements(&sp.projection) {
+                    ff.push(x);
+                }
+                for i in 48..base.len() {
+                    ff.push(base[i]);
+                }
+                self.frame_floats = ff;
+                self.fver += 1;
+                for it in casters.iter() {
+                    self.draw(c, &mut frame, it, &None, s);
+                }
+            }
+            if kind == 3 {
+                self.vsm_blur(c, &res, sp.radius, sp.blur_samples);
+            }
+            // the receivers' side of it
+            let m = elements(&sp.matrix);
+            for i in 0..16 {
+                self.shadow_mat[(slot as usize) * 16 + i] = m[i];
+            }
+            let o = (slot as usize) * 4;
+            self.shadow_param[o] = sp.intensity;
+            self.shadow_param[o + 1] = sp.bias;
+            self.shadow_param[o + 2] = sp.normal_bias;
+            self.shadow_param[o + 3] = sp.radius;
+            self.shadow_size[o] = fw as f64;
+            self.shadow_size[o + 1] = fh as f64;
+            self.shadow_size[o + 2] = sp.near;
+            self.shadow_size[o + 3] = sp.far;
+            if (sp.light as usize) < slots.len() {
+                slots[sp.light as usize] = slot;
+            }
+            let unit = if slot == 0 {
+                8
+            } else if slot == 1 {
+                9
+            } else if slot == 2 {
+                13
+            } else {
+                15
+            };
+            c.bind(unit, if kind == 3 { res.map } else { res.depth }, point);
+        }
+        for m in frame.missing.iter() {
+            missing.push(m.clone());
+        }
+        self.shadow_pass = 0;
+        self.frame_floats = base;
+        self.frame_ints = saved_ints;
+        slots
+    }
+
+    /// A shadow slot's depth texture and targets, remade when its size, type or kind changes.
+    #[allow(clippy::too_many_arguments)]
+    fn shadow_target(&mut self, c: &mut GpuCommands, slot: i64, w: i64, h: i64, kind: i64, point: bool, half_float: bool) -> ShadowRes {
+        let r = self.shadow_res[slot as usize].clone();
+        if r.depth != 0 && r.w == w && r.h == h && r.kind == kind && r.point == point {
+            return r;
+        }
+        let mut old: Vec<i64> = Vec::new();
+        if r.depth != 0 {
+            for t in r.targets.iter() {
+                old.push(*t);
+            }
+            old.push(r.depth);
+            if r.pass != 0 {
+                old.push(r.pass_t);
+                old.push(r.pass);
+                old.push(r.map_t);
+                old.push(r.map);
+            }
+        }
+        for id in old.iter() {
+            c.release(*id);
+        }
+        let vsm = kind == 3;
+        let filter = if kind == 1 { GL_LINEAR } else { 9728 };
+        let depth = self.id();
+        // DEPTH_COMPONENT32F / FLOAT for VSM, else DEPTH_COMPONENT24 / UNSIGNED_INT, compared
+        let size_h = if point { w } else { h };
+        c.texture(
+            depth,
+            &vec![
+                if point { 1 } else { 0 },
+                if vsm { 36012 } else { 33190 },
+                6402,
+                if vsm { 5126 } else { 5125 },
+                w,
+                size_h,
+                filter,
+                filter,
+                GL_CLAMP,
+                GL_CLAMP,
+                if vsm { 0 } else { 1 },
+            ],
+            &Vec::new(),
+        );
+        let mut targets: Vec<i64> = Vec::new();
+        if point {
+            for f in 0..6 {
+                let t = self.id();
+                c.target(t, w, w, 0, 0, 0, 3 + f, depth);
+                targets.push(t);
+            }
+        } else {
+            let t = self.id();
+            c.target(t, w, h, 0, 0, 0, 1, depth);
+            targets.push(t);
+        }
+        let mut res = ShadowRes { w, h, kind, point, depth, targets, pass: 0, pass_t: 0, map: 0, map_t: 0 };
+        if vsm {
+            let params: Vec<i64> = vec![
+                0,
+                if half_float { 33327 } else { 32856 },
+                if half_float { 33319 } else { 6408 },
+                if half_float { 5131 } else { 5121 },
+                w,
+                h,
+                GL_LINEAR,
+                GL_LINEAR,
+                GL_CLAMP,
+                GL_CLAMP,
+                0,
+            ];
+            res.pass = self.id();
+            c.texture(res.pass, &params, &Vec::new());
+            res.pass_t = self.id();
+            c.target(res.pass_t, w, h, 0, 1, res.pass, 0, 0);
+            res.map = self.id();
+            c.texture(res.map, &params, &Vec::new());
+            res.map_t = self.id();
+            c.target(res.map_t, w, h, 0, 1, res.map, 0, 0);
+        }
+        self.shadow_res[slot as usize] = res.clone();
+        res
+    }
+
+    /// VSM: the depth map blurred into moments, horizontally then vertically.
+    fn vsm_blur(&mut self, c: &mut GpuCommands, res: &ShadowRes, radius: f64, samples: i64) {
+        if self.vsm_prog == 0 {
+            self.vsm_prog = self.id();
+            let names: Vec<String> = vec![
+                String::from("u_src"),
+                String::from("u_res"),
+                String::from("u_radius"),
+                String::from("u_samples"),
+                String::from("u_horizontal"),
+            ];
+            c.program(self.vsm_prog, &full_vs(), &vsm_blur_fs(), &names);
+        }
+        c.use_program(self.vsm_prog);
+        self.fullscreen_state(c);
+        c.uniform_int(0, 0);
+        c.uniform(1, U_VEC2, &vec![res.w as f64, res.h as f64]);
+        c.uniform(2, U_FLOAT, &vec![radius]);
+        c.uniform(3, U_FLOAT, &vec![samples as f64]);
+        c.pass(res.pass_t, res.w, res.h, 0, &vec![0.0, 0.0, 0.0, 0.0], 1.0);
+        c.bind(0, res.depth, false);
+        c.uniform_int(4, 0);
+        c.draw(GL_TRIANGLES, 0, 3, 0, 0);
+        c.pass(res.map_t, res.w, res.h, 0, &vec![0.0, 0.0, 0.0, 0.0], 1.0);
+        c.bind(0, res.pass, false);
+        c.uniform_int(4, 1);
+        c.draw(GL_TRIANGLES, 0, 3, 0, 0);
     }
 
     /// `scene` from `camera` as commands.
@@ -1089,30 +1382,10 @@ impl GpuRenderer {
                 override_mat = Some(m.clone());
             }
         }
-        if s.shadows && !shadow_plans(scene).is_empty() {
-            missing.push(String::from("shadow maps"));
-        }
         self.ensure_fixed(&mut c);
-        self.prepare_envs(&mut c, &plan.items, s.half_float);
         let w = s.width;
         let h = s.height;
-        let cl = plan.clear;
-        let rgba = if s.output_linear {
-            vec![clamp01(cl.r), clamp01(cl.g), clamp01(cl.b), plan.clear_alpha]
-        } else {
-            vec![linear_to_srgb(clamp01(cl.r)), linear_to_srgb(clamp01(cl.g)), linear_to_srgb(clamp01(cl.b)), plan.clear_alpha]
-        };
-        c.pass(0, w, h, 3, &rgba, 1.0);
-        // shadow-map stand-ins (shadow type 1) and the DFG table
-        c.bind(8, self.shadow_flat, false);
-        c.bind(9, self.shadow_flat, false);
-        c.bind(13, self.shadow_flat, false);
-        c.bind(15, self.shadow_cube, true);
-        c.bind(2, self.dfg, false);
-        if let Some(t) = &bg_tex {
-            self.background(&mut c, t, bg_blur, bg_intensity, &bg_rotation, &plan.view, &plan.projection, s);
-        }
-        // the frame's uniforms
+        // the frame's uniforms (the shadow passes replace view and projection)
         let mut ff: Vec<f64> = elements(&plan.view);
         let mut inv = plan.view;
         inv.invert();
@@ -1130,7 +1403,38 @@ impl GpuRenderer {
         }
         ff.push((h as f64) * 0.5);
         ff.push(s.exposure);
+        let camera_floats = ff.clone();
         self.frame_floats = ff;
+        // shadow type (three.js: 0 basic, 1 PCF, 2 PCF soft = PCF, 3 VSM) -> 2, 1, 3; 0 none
+        let stype = if !s.shadows {
+            0
+        } else if s.shadow_type == 0 {
+            2
+        } else if s.shadow_type == 3 {
+            3
+        } else {
+            1
+        };
+        self.stype = if stype == 0 { 1 } else { stype };
+        self.bind_shadow_dummies(&mut c, self.stype);
+        let mut slots: Vec<i64> = vec![-1; MAX_LIGHTS as usize];
+        if stype != 0 {
+            slots = self.render_shadows(&mut c, scene, &plan.items, stype, s, &mut missing);
+        }
+        self.prepare_envs(&mut c, &plan.items, s.half_float);
+        let cl = plan.clear;
+        let rgba = if s.output_linear {
+            vec![clamp01(cl.r), clamp01(cl.g), clamp01(cl.b), plan.clear_alpha]
+        } else {
+            vec![linear_to_srgb(clamp01(cl.r)), linear_to_srgb(clamp01(cl.g)), linear_to_srgb(clamp01(cl.b)), plan.clear_alpha]
+        };
+        c.pass(0, w, h, 3, &rgba, 1.0);
+        c.bind(2, self.dfg, false);
+        if let Some(t) = &bg_tex {
+            self.background(&mut c, t, bg_blur, bg_intensity, &bg_rotation, &plan.view, &plan.projection, s);
+        }
+        self.frame_floats = camera_floats;
+        self.fver += 1;
         // lights packed by kind (stable), so each kind's loop reads a contiguous range
         let n = if plan.light_count < MAX_LIGHTS { plan.light_count } else { MAX_LIGHTS };
         let stride = LIGHT_STRIDE as usize;
@@ -1144,6 +1448,9 @@ impl GpuRenderer {
                     for j in 0..stride {
                         lights[at * stride + j] = plan.lights[i * stride + j];
                     }
+                    if slots[i] >= 0 {
+                        lights[at * stride + 18] = (slots[i] + 1) as f64;
+                    }
                     at += 1;
                     counts[kind as usize] += 1;
                 }
@@ -1154,6 +1461,12 @@ impl GpuRenderer {
         }
         self.lights = lights;
         self.light_counts = counts;
+        self.has_shadows = false;
+        for i in 0..(n as usize) {
+            if slots[i] >= 0 {
+                self.has_shadows = true;
+            }
+        }
         self.frame_ints = vec![n];
         self.fog_kind = if plan.fog[0] > 1.5 {
             2
@@ -1393,7 +1706,8 @@ impl GpuRenderer {
                 }
             }
         }
-        let env_mode = self.env_bind(c, &m);
+        let sp = self.shadow_pass;
+        let env_mode = if sp != 0 { 0 } else { self.env_bind(c, &m) };
         let points_uv = if kind == 6 && !has_uv { 1 } else { 0 };
         let opaque = !m.transparent && m.blending == Blending::Normal;
         let physical = if mu[22] > 0.5 { 1 } else { 0 };
@@ -1429,6 +1743,19 @@ impl GpuRenderer {
         ];
         for k in 0..6 {
             vals.push(if lit { self.light_counts[k] } else { 0 });
+        }
+        if sp != 0 {
+            // a shadow caster keeps only what decides its discards
+            let keep: Vec<i64> = vec![0, 1, 3, 9, 11, 12];
+            let mut v2: Vec<i64> = vec![0; vals.len()];
+            for k in keep.iter() {
+                v2[*k as usize] = vals[*k as usize];
+            }
+            v2[5] = bits & 1;
+            v2[23] = 1;
+            vals = v2;
+        } else {
+            vals[10] = if o.receive_shadow && self.has_shadows { 1 } else { 0 };
         }
         if vals.len() != key_names().len() {
             frame.missing.push(String::from("program key"));
@@ -1491,7 +1818,7 @@ impl GpuRenderer {
         c.uniform_int(self.loc("u_sizeAtt"), if m.size_attenuation { 1 } else { 0 });
         // state
         let ccw = o.matrix_world.determinant() >= 0.0;
-        let blend = self.blend_state(&m, opaque);
+        let blend = if sp != 0 { vec![0, GL_FUNC_ADD, GL_FUNC_ADD, GL_ONE, GL_ZERO, GL_ONE, GL_ZERO] } else { self.blend_state(&m, opaque) };
         // the range: draw range, intersected with the group
         let index = geometry.index.clone();
         let total: i64 = match &index {
@@ -1528,9 +1855,23 @@ impl GpuRenderer {
         } else {
             GL_TRIANGLES
         };
-        let side = mu[16] as i64;
+        let mut side = mu[16] as i64;
         let mut passes: Vec<i64> = vec![side];
-        if mesh && side == 2 && m.transparent {
+        if sp != 0 {
+            // shadow side: the material's shadowSide, else front <-> back (VSM keeps the side)
+            side = if mu[23] >= 0.0 {
+                mu[23] as i64
+            } else if sp == 3 {
+                side
+            } else if side == 0 {
+                1
+            } else if side == 1 {
+                0
+            } else {
+                2
+            };
+            passes = vec![side];
+        } else if mesh && side == 2 && m.transparent {
             passes = vec![1, 0];
         }
         let wire = mesh && m.wireframe;
@@ -1586,13 +1927,13 @@ impl GpuRenderer {
                     blend[4],
                     blend[5],
                     blend[6],
-                    if m.depth_test { 1 } else { 0 },
+                    if m.depth_test || sp != 0 { 1 } else { 0 },
                     GL_LEQUAL,
-                    if m.depth_write { 1 } else { 0 },
+                    if m.depth_write || sp != 0 { 1 } else { 0 },
                     cull,
                     if ccw { 1 } else { 0 },
-                    if m.color_write { 1 } else { 0 },
-                    if m.polygon_offset { 1 } else { 0 },
+                    if m.color_write || sp != 0 { 1 } else { 0 },
+                    if m.polygon_offset && sp == 0 { 1 } else { 0 },
                 ],
                 &vec![0.0, 0.0, 0.0, 0.0, m.polygon_offset_factor, m.polygon_offset_units],
             );

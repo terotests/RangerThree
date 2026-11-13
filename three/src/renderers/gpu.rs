@@ -36,7 +36,7 @@
 //! | 9 | DRAW | mode (GL), first, count, instances (0 none), index buffer (0 none) | |
 //! | 10 | BIND | unit, texture id (0 none), cube | |
 //! | 11 | RELEASE | id | |
-//! | 12 | TARGET | id, w, h, samples, colour (0 none, 1 texture, 2 renderbuffer), colour texture id or internal format, depth (same), depth texture id or internal format | |
+//! | 12 | TARGET | id, w, h, samples, colour (0 none, 1 texture, 2 renderbuffer, 3 + f face f of a cube texture), colour texture id or internal format, depth (same), depth texture id or internal format | |
 //! | 13 | COPY | source target, destination target, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask (GL bits), filter (GL) | |
 //!
 //! The stream's shape follows WebGPU where that costs nothing (ids from the
@@ -288,8 +288,9 @@ impl GpuCommands {
 
     /// A render target of `w` x `h`: its colour and depth attachments are
     /// each none (kind 0), a texture made by TEXTURE (kind 1, `colour` /
-    /// `depth` its id) or a renderbuffer (kind 2, the value its GL internal
-    /// format), multisampled with `samples` > 0.
+    /// `depth` its id; kind 3 + f: face f of a cube texture) or a
+    /// renderbuffer (kind 2, the value its GL internal format),
+    /// multisampled with `samples` > 0. Without colour it draws depth only.
     #[allow(clippy::too_many_arguments)]
     pub fn target(&mut self, id: i64, w: i64, h: i64, samples: i64, colour_kind: i64, colour: i64, depth_kind: i64, depth: i64) {
         self.op(OP_TARGET);

@@ -203,9 +203,9 @@
             var ak = ints[i - 4 + at * 2], av = ints[i - 3 + at * 2];
             var depthAt = av === gl.DEPTH24_STENCIL8 || av === gl.DEPTH32F_STENCIL8 ? gl.DEPTH_STENCIL_ATTACHMENT : gl.DEPTH_ATTACHMENT;
             var point = at === 0 ? gl.COLOR_ATTACHMENT0 : depthAt;
-            if (ak === 1) {
+            if (ak === 1 || ak >= 3) {
               if (at === 1) point = gl.DEPTH_ATTACHMENT;
-              gl.framebufferTexture2D(gl.FRAMEBUFFER, point, gl.TEXTURE_2D, obj[av].tex, 0);
+              gl.framebufferTexture2D(gl.FRAMEBUFFER, point, ak >= 3 ? gl.TEXTURE_CUBE_MAP_POSITIVE_X + ak - 3 : gl.TEXTURE_2D, obj[av].tex, 0);
             } else if (ak === 2) {
               var rbo = gl.createRenderbuffer();
               gl.bindRenderbuffer(gl.RENDERBUFFER, rbo);
@@ -215,6 +215,7 @@
               tg.rbs.push(rbo);
             }
           }
+          if (ints[i - 4] === 0) { gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE); }
           if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("gpu-webgl2: target " + gid + " is incomplete");
           gl.bindFramebuffer(gl.FRAMEBUFFER, null);
           obj[gid] = tg;

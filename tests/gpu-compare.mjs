@@ -39,6 +39,12 @@ scene.add(box);
 renderer.setAnimationLoop(() => renderer.render(scene, camera));
 `,
 });
+// the shadow example with the other shadow map types
+const SHADOWS = ctx.EXAMPLES["Shadows: sun, spot and point"];
+if (SHADOWS) {
+  ctx.EXAMPLES["(test) Shadows, basic"] = SHADOWS.replace("THREE.PCFShadowMap", "THREE.BasicShadowMap");
+  ctx.EXAMPLES["(test) Shadows, VSM"] = SHADOWS.replace("THREE.PCFShadowMap", "THREE.VSMShadowMap");
+}
 const LIB = ["build/rangerthree-core.js", "js/three.js", "js/three-scene.js", "js/three-curves.js", "js/three-renderer.js", "js/three-webgl.js", "js/gpu-webgl2.js"]
   .map((f) => fs.readFileSync(path.join(ROOT, f), "utf8")).join("\n;\n");
 
@@ -88,7 +94,7 @@ for (const name of Object.keys(ctx.EXAMPLES)) {
     s.pixel_ratio = renderer._pixelRatio; s.tone_mapping = renderer.toneMapping | 0;
     s.exposure = renderer.toneMappingExposure === undefined ? 1 : renderer.toneMappingExposure;
     s.output_linear = renderer.outputColorSpace === "srgb-linear";
-    s.shadows = !!(renderer.shadowMap && renderer.shadowMap.enabled); s.half_float = !!gl.getExtension("EXT_color_buffer_float"); s.clear_color = renderer._soft.clear_color; s.clear_alpha = renderer._soft.clear_alpha;
+    s.shadows = !!(renderer.shadowMap && renderer.shadowMap.enabled); s.half_float = !!gl.getExtension("EXT_color_buffer_float"); s.shadow_type = renderer.shadowMap ? renderer.shadowMap.type | 0 : 1; s.clear_color = renderer._soft.clear_color; s.clear_alpha = renderer._soft.clear_alpha;
     let b, first = null; const pl = [], py = [];
     for (let i = 0; i < frames; i++) {
       const t0 = performance.now();

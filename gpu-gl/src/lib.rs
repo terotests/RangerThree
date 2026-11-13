@@ -379,12 +379,13 @@ impl Player {
                             } else {
                                 DEPTH_ATTACHMENT
                             };
-                            if kind == 1 {
+                            if kind == 1 || kind >= 3 {
                                 let tex = match self.objs.get(&v) {
                                     Some(Obj::Texture { tex }) => *tex,
                                     _ => return Err(format!("gpu-gl: id {} is not a texture", v)),
                                 };
-                                (gl.FramebufferTexture2D)(FRAMEBUFFER, point, TEXTURE_2D, tex, 0);
+                                let face = if kind >= 3 { TEXTURE_CUBE_MAP_POSITIVE_X + (kind - 3) as GLenum } else { TEXTURE_2D };
+                                (gl.FramebufferTexture2D)(FRAMEBUFFER, point, face, tex, 0);
                             } else if kind == 2 {
                                 let mut rb = 0;
                                 (gl.GenRenderbuffers)(1, &mut rb);
@@ -397,6 +398,11 @@ impl Player {
                                 (gl.FramebufferRenderbuffer)(FRAMEBUFFER, point, RENDERBUFFER, rb);
                                 rbs.push(rb);
                             }
+                        }
+                        if a[4] == 0 {
+                            // depth only: GL 3.3 counts a draw buffer without an image as incomplete
+                            (gl.DrawBuffers)(1, &NONE);
+                            (gl.ReadBuffer)(NONE);
                         }
                         let status = (gl.CheckFramebufferStatus)(FRAMEBUFFER);
                         (gl.BindFramebuffer)(FRAMEBUFFER, self.screen_fb);
