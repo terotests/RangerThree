@@ -252,6 +252,9 @@
   // height, data: RGBA bytes, rows from the top } or null while not ready
   // (THREE.WebGLRenderer.decodeImage: data textures, images, canvases).
   GpuWebGL2.uploadImages = function (renderer, scene, decode) {
+    // ShaderMaterial uniforms live on the three.js facade; hand their current values to the crate first
+    var T = root.THREE;
+    if (T && T.__syncShaderMaterials) T.__syncShaderMaterials(scene);
     var list = renderer.textures_to_upload(scene);
     for (var k = 0; k < list.length; k++) {
       var tex = list[k], px = decode(tex.image, tex);
