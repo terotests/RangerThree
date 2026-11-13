@@ -33,6 +33,9 @@ interface Gl {
     fun deleteProgram(p: Int)
     fun useProgram(p: Int)
     fun getUniformLocation(p: Int, name: String): Int
+    fun getUniformBlockIndex(p: Int, name: String): Int
+    fun uniformBlockBinding(p: Int, index: Int, binding: Int)
+    fun bindBufferRange(target: Int, index: Int, b: Int, offset: Int, bytes: Int)
 
     fun uniform1i(loc: Int, v: Int)
     fun uniform1fv(loc: Int, count: Int, v: FloatArray, offset: Int)
@@ -101,6 +104,8 @@ object GL {
     const val RENDERER = 0x1F01
     const val ARRAY_BUFFER = 0x8892
     const val ELEMENT_ARRAY_BUFFER = 0x8893
+    const val UNIFORM_BUFFER = 0x8A11
+    const val INVALID_INDEX = -1 // 0xFFFFFFFF
     const val STATIC_DRAW = 0x88E4
     const val DYNAMIC_DRAW = 0x88E8
     const val VERTEX_SHADER = 0x8B31
