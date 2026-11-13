@@ -10,10 +10,14 @@
 //! area lights; shadow maps (PCF, basic, VSM, point light cubes); scene and
 //! material environments (prefiltered as three.js's PMREM, or equirect);
 //! texture and blurred backgrounds; transmission; fog, tone mapping, output
-//! colour space, blending, sides, wireframe, draw ranges and groups. What a
-//! frame needs beyond that (morph targets, shader materials) is reported in
-//! `GpuFrame::missing`, and the host draws such a frame with the WebGL2
-//! backend.
+//! colour space, blending, sides, wireframe, draw ranges and groups; morph
+//! targets (positions and normals, blended on the CPU when the influences
+//! change); ShaderMaterial and RawShaderMaterial (gpu_shader.rs: three.js's
+//! prefixes, GLSL 1 or 3, float/vec/mat/int/bool/sampler2D uniforms and
+//! arrays, up to 6 own vertex attributes) against three.js r185. What a
+//! frame needs beyond that (shader chunk `#include`s, samplerCube or integer
+//! vector uniforms, instanced own attributes) is reported in
+//! `GpuFrame::missing`, and the host draws such a frame another way.
 //!
 //! Texture pixels come from the host, which decodes images its own way (the
 //! browser's image and canvas decoders, a native PNG decoder, a canvas 2D
@@ -31,6 +35,7 @@ use crate::maths::matrix4::Matrix4;
 use crate::renderers::dfg_table::dfg_table;
 use crate::renderers::ltc_table::{ltc_1, ltc_2};
 use crate::renderers::gpu::{GpuCommands, U_FLOAT, U_MAT3, U_MAT4, U_VEC2, U_VEC3, U_VEC4};
+use crate::renderers::gpu_shader::{includes, shader_sources, uniform_declarations, CUSTOM_ATTRIB_BASE, MAX_ATTRIBS};
 use crate::renderers::plan::{material_uniforms, map_transform, plan_frame, shadow_plans, DrawItem, RenderPlan, LIGHT_STRIDE};
 use crate::renderers::shaders::{background_fs, full_vs, key_names, main_fragment, main_vertex, pmrem_fs, uniform_names, vsm_blur_fs, MAX_LIGHTS};
 use crate::core::object3d::visible_descendants;
@@ -113,6 +118,58 @@ pub struct GpuFrame {
     pub triangles: i64,
     pub lines: i64,
     pub points: i64,
+}
+
+/// A shader material's program: uniform names and GLSL types by location,
+/// and its own attributes from CUSTOM_ATTRIB_BASE.
+#[derive(Clone)]
+struct ShaderProgram {
+    id: i64,
+    names: Vec<String>,
+    types: Vec<String>,
+    attribs: Vec<String>,
+}
+
+/// A morphed attribute's buffer and what it was blended from.
+#[derive(Clone)]
+struct MorphEntry {
+    id: i64,
+    key: String,
+}
+
+/// Texture units a shader material's samplers take: the per-draw map
+/// units, never the ones a frame binds once (DFG 2, shadows, LTC 10).
+const SHADER_UNITS: [i64; 9] = [0, 1, 3, 4, 5, 6, 7, 11, 12];
+
+/// Column-major a * b.
+fn mul4(a: &Vec<f64>, b: &Vec<f64>) -> Vec<f64> {
+    let mut out: Vec<f64> = vec![0.0; 16];
+    for col in 0..4 {
+        for row in 0..4 {
+            let mut v = 0.0;
+            for k in 0..4 {
+                v += a[k * 4 + row] * b[col * 4 + k];
+            }
+            out[col * 4 + row] = v;
+        }
+    }
+    out
+}
+
+/// The textures `m` reads: its maps and its shader uniforms' samplers.
+fn material_textures(m: &Material) -> Vec<TextureRef> {
+    let mut out: Vec<TextureRef> = Vec::new();
+    for k in 0..MAP_COUNT {
+        if let Some(t) = material_map(m, k) {
+            out.push(t);
+        }
+    }
+    for u in m.shader_uniforms.iter() {
+        if let Some(t) = &u.texture {
+            out.push(t.clone());
+        }
+    }
+    out
 }
 
 #[derive(Clone)]
@@ -204,6 +261,8 @@ pub struct GpuRenderer {
     frame: i64,
     buffers: Map<String, BufferEntry>,
     programs: Map<String, ProgramEntry>,
+    shader_progs: Map<String, ShaderProgram>,
+    morphs: Map<String, MorphEntry>,
     textures: Map<i64, TextureEntry>,
     /// the next id given to an object, geometry or texture that has none (0)
     auto_id: i64,
@@ -427,6 +486,8 @@ impl GpuRenderer {
             frame: 0,
             buffers: Map::new(),
             programs: Map::new(),
+            shader_progs: Map::new(),
+            morphs: Map::new(),
             textures: Map::new(),
             auto_id: AUTO_ID_BASE,
             images: Map::new(),
@@ -617,12 +678,10 @@ impl GpuRenderer {
                 self.auto_id += 1;
             }
             for m in data.materials.iter() {
-                for k in 0..MAP_COUNT {
-                    if let Some(t) = material_map(&m.borrow(), k) {
-                        if t.borrow().id == 0 {
-                            t.borrow_mut().id = self.auto_id;
-                            self.auto_id += 1;
-                        }
+                for t in material_textures(&m.borrow()).iter() {
+                    if t.borrow().id == 0 {
+                        t.borrow_mut().id = self.auto_id;
+                        self.auto_id += 1;
                     }
                 }
             }
@@ -655,15 +714,13 @@ impl GpuRenderer {
                 _ => continue,
             };
             for m in data.materials.iter() {
-                for k in 0..MAP_COUNT {
-                    if let Some(t) = material_map(&m.borrow(), k) {
-                        let id = t.borrow().id;
-                        let version = t.borrow().version;
-                        if !seen.contains(&id) {
-                            seen.push(id);
-                            if self.texture_image_version(id) != version {
-                                out.push(t.clone());
-                            }
+                for t in material_textures(&m.borrow()).iter() {
+                    let id = t.borrow().id;
+                    let version = t.borrow().version;
+                    if !seen.contains(&id) {
+                        seen.push(id);
+                        if self.texture_image_version(id) != version {
+                            out.push(t.clone());
                         }
                     }
                 }
@@ -1693,6 +1750,276 @@ impl GpuRenderer {
         }
     }
 
+    /// The buffer of attribute `name` (3 components) with the object's morph
+    /// targets blended in (three.js: base + sum of influence * target, the
+    /// target less the base unless `morphTargetsRelative`); 0 when the
+    /// geometry has no morph targets for it.
+    fn morph_buffer(&mut self, c: &mut GpuCommands, oid: &str, name: &str, data: &MeshData) -> i64 {
+        let g = data.geometry.borrow();
+        let base = match g.get_attribute(name) {
+            Some(a) => a,
+            None => return 0,
+        };
+        let b = base.borrow();
+        let influences = &data.morph_target_influences;
+        let mut key = b.version.to_string();
+        let mut used: Vec<i64> = Vec::new();
+        if let Some(targets) = g.morph_attributes.get(name) {
+            for (i, t) in targets.iter().enumerate() {
+                if i < influences.len() && influences[i] != 0.0 {
+                    used.push(i as i64);
+                    key.push_str(":");
+                    key.push_str(&t.borrow().version.to_string());
+                    key.push_str("*");
+                    key.push_str(&influences[i].to_string());
+                }
+            }
+        } else {
+            return 0;
+        }
+        let bkey = oid.to_string() + ":morph:" + name;
+        let mut id: i64 = 0;
+        if let Some(e) = self.morphs.get(&bkey) {
+            if e.key == key {
+                return e.id;
+            }
+            id = e.id;
+        }
+        let n = b.count;
+        let mut out: Vec<f64> = vec![0.0; n * 3];
+        for i in 0..n {
+            let v = b.get_vector3(i);
+            out[i * 3] = v.x;
+            out[i * 3 + 1] = v.y;
+            out[i * 3 + 2] = v.z;
+        }
+        if let Some(targets) = g.morph_attributes.get(name) {
+            for u in used.iter() {
+                let k = *u as usize;
+                let w = influences[k];
+                let t = targets[k].borrow();
+                let m = if t.count < n { t.count } else { n };
+                for i in 0..m {
+                    let v = t.get_vector3(i);
+                    let mut dx = v.x;
+                    let mut dy = v.y;
+                    let mut dz = v.z;
+                    if !g.morph_targets_relative {
+                        let o = b.get_vector3(i);
+                        dx -= o.x;
+                        dy -= o.y;
+                        dz -= o.z;
+                    }
+                    out[i * 3] += w * dx;
+                    out[i * 3 + 1] += w * dy;
+                    out[i * 3 + 2] += w * dz;
+                }
+            }
+        }
+        if id == 0 {
+            id = self.id();
+        }
+        c.buffer(id, false, true, &out);
+        self.morphs.insert(bkey, MorphEntry { id, key });
+        id
+    }
+
+    /// Uses the program of a ShaderMaterial / RawShaderMaterial and sets its
+    /// uniforms and own attributes; false, with the reason in
+    /// `frame.missing`, when this path cannot draw it.
+    #[allow(clippy::too_many_arguments)]
+    fn use_shader(&mut self, c: &mut GpuCommands, frame: &mut GpuFrame, m: &Material, model: &Matrix4, instanced: bool, colors: bool, data: &MeshData) -> bool {
+        let raw = m.kind == MaterialKind::RawShader;
+        let mut ok = true;
+        for inc in includes(&m.vertex_shader).iter() {
+            frame.missing.push(String::from("shader chunk ") + inc);
+            ok = false;
+        }
+        for inc in includes(&m.fragment_shader).iter() {
+            frame.missing.push(String::from("shader chunk ") + inc);
+            ok = false;
+        }
+        if !ok {
+            return false;
+        }
+        let mut key = String::from(if raw { "raw" } else { "sh" });
+        key.push_str(if m.glsl3 { ":3" } else { ":1" });
+        key.push_str(if instanced { ":i" } else { ":-" });
+        key.push_str(if colors { ":c" } else { ":-" });
+        for d in m.shader_defines.iter() {
+            key.push_str("\n");
+            key.push_str(d);
+        }
+        key.push_str("\n#vs\n");
+        key.push_str(&m.vertex_shader);
+        key.push_str("\n#fs\n");
+        key.push_str(&m.fragment_shader);
+        if !self.shader_progs.contains_key(&key) {
+            let src = shader_sources(m, raw, instanced, colors);
+            if CUSTOM_ATTRIB_BASE + (src.len() as i64 - 2) > MAX_ATTRIBS {
+                frame.missing.push(String::from("more than 6 shader attributes"));
+                return false;
+            }
+            let decl = uniform_declarations(&src[0], &src[1]);
+            let mut names: Vec<String> = Vec::new();
+            let mut types: Vec<String> = Vec::new();
+            let mut i = 0;
+            while i + 1 < decl.len() {
+                types.push(decl[i].clone());
+                names.push(decl[i + 1].clone());
+                i += 2;
+            }
+            let mut attribs: Vec<String> = Vec::new();
+            for k in 2..src.len() {
+                attribs.push(src[k].clone());
+            }
+            let id = self.id();
+            c.program(id, &src[0], &src[1], &names);
+            self.shader_progs.insert(key.clone(), ShaderProgram { id, names, types, attribs });
+        }
+        let p = match self.shader_progs.get(&key) {
+            Some(e) => e.clone(),
+            None => return false,
+        };
+        c.use_program(p.id);
+        let f = self.frame_floats.clone();
+        let mut view: Vec<f64> = Vec::new();
+        let mut proj: Vec<f64> = Vec::new();
+        for i in 0..16 {
+            view.push(f[i]);
+            proj.push(f[32 + i]);
+        }
+        let model_e = elements(model);
+        let mv = mul4(&view, &model_e);
+        let mut mva: [f64; 16] = [0.0; 16];
+        for i in 0..16 {
+            mva[i] = mv[i];
+        }
+        let mut unit: usize = 0;
+        for i in 0..p.names.len() {
+            let n = p.names[i].clone();
+            let t = p.types[i].clone();
+            let loc = i as i64;
+            if n == "modelMatrix" {
+                c.uniform(loc, U_MAT4, &model_e);
+                continue;
+            }
+            if n == "viewMatrix" {
+                c.uniform(loc, U_MAT4, &view);
+                continue;
+            }
+            if n == "projectionMatrix" {
+                c.uniform(loc, U_MAT4, &proj);
+                continue;
+            }
+            if n == "modelViewMatrix" {
+                c.uniform(loc, U_MAT4, &mv);
+                continue;
+            }
+            if n == "normalMatrix" {
+                c.uniform(loc, U_MAT3, &normal_matrix(&mva));
+                continue;
+            }
+            if n == "cameraPosition" {
+                c.uniform(loc, U_VEC3, &vec![f[48], f[49], f[50]]);
+                continue;
+            }
+            if n == "isOrthographic" {
+                c.uniform_int(loc, if proj[15] == 1.0 { 1 } else { 0 });
+                continue;
+            }
+            let mut found = false;
+            let mut values: Vec<f64> = Vec::new();
+            let mut tex: Option<TextureRef> = None;
+            for u in m.shader_uniforms.iter() {
+                if u.name == n {
+                    found = true;
+                    values = u.values.clone();
+                    tex = u.texture.clone();
+                }
+            }
+            if !found {
+                continue;
+            }
+            if t == "sampler2D" {
+                if let Some(tx) = &tex {
+                    if unit >= SHADER_UNITS.len() {
+                        frame.missing.push(String::from("more than 9 shader textures"));
+                        return false;
+                    }
+                    let u = SHADER_UNITS[unit];
+                    unit += 1;
+                    self.texture(c, tx, u);
+                    c.uniform_int(loc, u);
+                }
+                continue;
+            }
+            if t == "int" || t == "bool" {
+                if !values.is_empty() {
+                    c.uniform_int(loc, values[0] as i64);
+                }
+                continue;
+            }
+            let kind = if t == "float" {
+                U_FLOAT
+            } else if t == "vec2" {
+                U_VEC2
+            } else if t == "vec3" {
+                U_VEC3
+            } else if t == "vec4" {
+                U_VEC4
+            } else if t == "mat3" {
+                U_MAT3
+            } else if t == "mat4" {
+                U_MAT4
+            } else {
+                0
+            };
+            if kind == 0 {
+                frame.missing.push(String::from("shader uniform type ") + &t);
+                return false;
+            }
+            let size: usize = if kind == U_VEC2 {
+                2
+            } else if kind == U_VEC3 {
+                3
+            } else if kind == U_VEC4 {
+                4
+            } else if kind == U_MAT3 {
+                9
+            } else if kind == U_MAT4 {
+                16
+            } else {
+                1
+            };
+            let whole = values.len() / size * size;
+            if whole == 0 {
+                continue;
+            }
+            let mut v: Vec<f64> = Vec::new();
+            for k in 0..whole {
+                v.push(values[k]);
+            }
+            c.uniform(loc, kind, &v);
+        }
+        let g = data.geometry.borrow();
+        let gid = g.id.to_string();
+        for k in 0..p.attribs.len() {
+            let loc = CUSTOM_ATTRIB_BASE + k as i64;
+            match g.get_attribute(&p.attribs[k]) {
+                Some(a) => {
+                    let aa = a.borrow();
+                    let bkey = gid.clone() + ":" + &p.attribs[k];
+                    let b = self.buffer(c, &bkey, aa.version, &aa.array, false, aa.usage == 35048);
+                    let size = if aa.item_size < 4 { aa.item_size as i64 } else { 4 };
+                    c.attrib(loc, b, size, (aa.item_size as i64) * 4, 0, 0, &Vec::new());
+                }
+                None => c.attrib(loc, 0, 4, 0, 0, 0, &vec![0.0, 0.0, 0.0, 0.0]),
+            }
+        }
+        true
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn draw_with(
         &mut self,
@@ -1712,14 +2039,9 @@ impl GpuRenderer {
         let mesh = kind == 1 || kind == 2;
         let dashed = m.kind == MaterialKind::LineDashed;
         let sprite = kind == 7;
-        if !data.morph_target_influences.is_empty() {
-            frame.missing.push(String::from("morph targets"));
-            return;
-        }
-        if m.kind == MaterialKind::Shader || m.kind == MaterialKind::RawShader {
-            frame.missing.push(String::from("shader materials"));
-            return;
-        }
+        let shader = self.shadow_pass == 0 && (m.kind == MaterialKind::Shader || m.kind == MaterialKind::RawShader);
+        let morphed = !data.morph_target_influences.is_empty();
+        let oid_s = o.id.to_string();
         let geometry = data.geometry.borrow();
         let gid = geometry.id.to_string();
         let position = match geometry.get_attribute("position") {
@@ -1730,17 +2052,27 @@ impl GpuRenderer {
         // attributes
         let pos = position.borrow();
         let pkey = gid.clone() + ":position";
-        let pbuf = self.buffer(c, &pkey, pos.version, &pos.array, false, pos.usage == 35048);
-        let psize = if pos.item_size < 3 { pos.item_size as i64 } else { 3 };
-        c.attrib(0, pbuf, psize, (pos.item_size as i64) * 4, 0, 0, &Vec::new());
+        let mut pbuf: i64 = if morphed { self.morph_buffer(c, &oid_s, "position", data) } else { 0 };
+        if pbuf != 0 {
+            c.attrib(0, pbuf, 3, 12, 0, 0, &Vec::new());
+        } else {
+            pbuf = self.buffer(c, &pkey, pos.version, &pos.array, false, pos.usage == 35048);
+            let psize = if pos.item_size < 3 { pos.item_size as i64 } else { 3 };
+            c.attrib(0, pbuf, psize, (pos.item_size as i64) * 4, 0, 0, &Vec::new());
+        }
         let mut has_normal = false;
         if mesh && mu[17] < 0.5 {
             if let Some(nattr) = geometry.get_attribute("normal") {
                 let na = nattr.borrow();
-                let key = gid.clone() + ":normal";
-                let b = self.buffer(c, &key, na.version, &na.array, false, na.usage == 35048);
-                let size = if na.item_size < 3 { na.item_size as i64 } else { 3 };
-                c.attrib(1, b, size, (na.item_size as i64) * 4, 0, 0, &Vec::new());
+                let mb = if morphed { self.morph_buffer(c, &oid_s, "normal", data) } else { 0 };
+                if mb != 0 {
+                    c.attrib(1, mb, 3, 12, 0, 0, &Vec::new());
+                } else {
+                    let key = gid.clone() + ":normal";
+                    let b = self.buffer(c, &key, na.version, &na.array, false, na.usage == 35048);
+                    let size = if na.item_size < 3 { na.item_size as i64 } else { 3 };
+                    c.attrib(1, b, size, (na.item_size as i64) * 4, 0, 0, &Vec::new());
+                }
                 has_normal = true;
             }
         }
@@ -1856,7 +2188,7 @@ impl GpuRenderer {
         }
         let sp = self.shadow_pass;
         let trans = if self.trans_tex != 0 { m.transmission } else { 0.0 };
-        let env_mode = if sp != 0 { 0 } else { self.env_bind(c, &m) };
+        let env_mode = if sp != 0 || shader { 0 } else { self.env_bind(c, &m) };
         let points_uv = if kind == 6 && !has_uv { 1 } else { 0 };
         let opaque = !m.transparent && m.blending == Blending::Normal;
         let physical = if mu[22] > 0.5 { 1 } else { 0 };
@@ -1908,6 +2240,11 @@ impl GpuRenderer {
         } else {
             vals[10] = if o.receive_shadow && self.has_shadows { 1 } else { 0 };
         }
+        if shader {
+            if !self.use_shader(c, frame, &m, &o.matrix_world, instances > 0, colored, data) {
+                return;
+            }
+        } else {
         if vals.len() != key_names().len() {
             frame.missing.push(String::from("program key"));
             return;
@@ -1973,6 +2310,7 @@ impl GpuRenderer {
         c.uniform(self.loc("u_aoIntensity"), U_FLOAT, &vec![m.ao_map_intensity]);
         c.uniform(self.loc("u_pointSize"), U_FLOAT, &vec![m.size * s.pixel_ratio]);
         c.uniform_int(self.loc("u_sizeAtt"), if m.size_attenuation { 1 } else { 0 });
+        }
         // state
         let ccw = o.matrix_world.determinant() >= 0.0;
         let blend = if sp != 0 { vec![0, GL_FUNC_ADD, GL_FUNC_ADD, GL_ONE, GL_ZERO, GL_ONE, GL_ZERO] } else { self.blend_state(&m, opaque) };
@@ -2028,7 +2366,7 @@ impl GpuRenderer {
                 2
             };
             passes = vec![side];
-        } else if mesh && side == 2 && m.transparent {
+        } else if mesh && side == 2 && m.transparent && !m.force_single_pass {
             passes = vec![1, 0];
         }
         let wire = mesh && m.wireframe;

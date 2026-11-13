@@ -3,6 +3,7 @@
 pub mod dfg_table;
 pub mod gpu;
 pub mod gpu_frame;
+pub mod gpu_shader;
 pub mod ltc_table;
 pub mod pbr;
 pub mod plan;

@@ -93,6 +93,26 @@ pub enum Blending {
     Custom,
 }
 
+/// A ShaderMaterial uniform's current value: `values` are its numbers
+/// (a vector's, colour's or matrix's elements, an array flattened), or
+/// `texture` for a sampler. The GLSL declaration decides how it is set.
+#[derive(Clone)]
+pub struct ShaderUniform {
+    pub name: String,
+    pub values: Vec<f64>,
+    pub texture: Option<TextureRef>,
+}
+
+impl ShaderUniform {
+    pub fn new(name: String, values: Vec<f64>) -> ShaderUniform {
+        ShaderUniform { name, values, texture: None }
+    }
+
+    pub fn with_texture(name: String, texture: TextureRef) -> ShaderUniform {
+        ShaderUniform { name, values: Vec::new(), texture: Some(texture) }
+    }
+}
+
 #[derive(Clone)]
 pub struct Material {
     pub id: i64,
@@ -146,6 +166,16 @@ pub struct Material {
     pub env_map: Option<TextureRef>,
     pub env_map_intensity: f64,
     pub env_map_rotation: Euler,
+    /// ShaderMaterial / RawShaderMaterial: the GLSL, `#define`s as name,
+    /// value pairs, the uniforms, and whether the sources are GLSL 3.
+    pub vertex_shader: String,
+    pub fragment_shader: String,
+    pub shader_defines: Vec<String>,
+    pub shader_uniforms: Vec<ShaderUniform>,
+    pub glsl3: bool,
+    /// A transparent double-sided mesh in one pass instead of back faces
+    /// first (three.js: true for shader materials).
+    pub force_single_pass: bool,
     pub reflectivity: f64,
     pub refraction_ratio: f64,
     pub combine: i64,
@@ -242,6 +272,12 @@ impl Material {
             env_map: None,
             env_map_intensity: 1.0,
             env_map_rotation: Euler::new(0.0, 0.0, 0.0, EulerOrder::Xyz),
+            vertex_shader: String::new(),
+            fragment_shader: String::new(),
+            shader_defines: Vec::new(),
+            shader_uniforms: Vec::new(),
+            glsl3: false,
+            force_single_pass: kind == MaterialKind::Shader || kind == MaterialKind::RawShader,
             reflectivity: 1.0,
             refraction_ratio: 0.98,
             combine: 0,
