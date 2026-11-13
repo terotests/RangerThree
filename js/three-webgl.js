@@ -1046,15 +1046,13 @@
     var env = this.envBind(material);
     var blending = material.blending === undefined ? 1 : material.blending;
     var opaque = material.transparent !== true && blending === 1 && !material.alphaToCoverage;
-    var physical = mu[22] > 0.5 ? 1 : 0;
-    var receive = o.receiveShadow && this.hasShadows ? 1 : 0;
-    // the program variant, in SPEC_KEYS order; a shadow caster keeps only what decides its discards
-    var sp = this.shadowPass ? 1 : 0;
-    var ok = this.useMain(this.stype, sp ? [glTex ? 1 : 0, pointsUv, 0, opaque ? 1 : 0, 0, bits & 1, 0, 0, 0, dashed ? 1 : 0, 0, instances > 0 ? 1 : 0, glD ? 1 : 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0] : [
-      glTex ? 1 : 0, pointsUv, hasNormal ? 1 : 0, opaque ? 1 : 0, material.toneMapped === false ? 0 : this.tone, bits, this.outLinear,
-      material.premultipliedAlpha ? 1 : 0, glE ? 1 : 0, dashed ? 1 : 0, receive, instances > 0 ? 1 : 0, glD ? 1 : 0, sprite ? 1 : 0,
-      mu[15] | 0, mu[13] > 0.5 ? 1 : 0, mu[14] > 0.5 ? 1 : 0, physical, mu[17] > 0.5 ? 1 : 0,
-      physical && sheen > 0 && shc ? 1 : 0, physical && tr > 0 ? 1 : 0, this.hasRect, mu[19] > 0.5 ? this.fogKind : 0, 0, env ? env.mode : 0, receive ? this.shSlots : 0].concat(mu[13] > 0.5 ? this.lightCounts : [0, 0, 0, 0, 0, 0]));
+    // the program variant: plan::program_key, shared with the GPU command renderer
+    var vi = this.vi || (this.vi = R.VariantInputs.new_());
+    vi.has_map = !!glTex; vi.points_uv = pointsUv === 1; vi.has_normal = !!hasNormal; vi.maps = bits; vi.has_emap = !!glE;
+    vi.instanced = instances > 0; vi.has_disp = !!glD; vi.sprite = sprite; vi.receive = !!(o.receiveShadow && this.hasShadows);
+    vi.transmission = tr > 0; vi.env_mode = env ? env.mode : 0; vi.alpha_to_coverage = !!material.alphaToCoverage; vi.shadow_pass = !!this.shadowPass;
+    vi.tone = this.tone; vi.linear_out = this.outLinear === 1; vi.fog_kind = this.fogKind; vi.sh_slots = this.shSlots; vi.light_counts = this.lightCounts;
+    var ok = this.useMain(this.stype, R.RenderersPlan.program_key(material, mu, vi));
     if (!ok) return;
     var u = this.u;
     gl.uniform4fv(u.u_mat, mu);

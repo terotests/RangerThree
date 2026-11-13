@@ -36,7 +36,7 @@ use crate::renderers::dfg_table::dfg_table;
 use crate::renderers::ltc_table::{ltc_1, ltc_2};
 use crate::renderers::gpu::{GpuCommands, U_FLOAT, U_MAT3, U_MAT4, U_VEC2, U_VEC3, U_VEC4};
 use crate::renderers::gpu_shader::{includes, shader_sources, uniform_declarations, CUSTOM_ATTRIB_BASE, MAX_ATTRIBS};
-use crate::renderers::plan::{material_uniforms, map_transform, plan_frame, shadow_plans, DrawItem, RenderPlan, LIGHT_STRIDE};
+use crate::renderers::plan::{material_uniforms, map_transform, plan_frame, program_key, shadow_plans, DrawItem, RenderPlan, VariantInputs, LIGHT_STRIDE};
 use crate::renderers::shaders::{background_fs, full_vs, key_names, main_fragment, main_vertex, pmrem_fs, uniform_names, vsm_blur_fs, MAX_LIGHTS};
 use crate::core::object3d::visible_descendants;
 use crate::maths::color::ColorSpace;
@@ -2218,57 +2218,26 @@ impl GpuRenderer {
         let env_mode = if sp != 0 || shader { 0 } else { self.env_bind(c, &m) };
         let points_uv = if kind == 6 && !has_uv { 1 } else { 0 };
         let opaque = !m.transparent && m.blending == Blending::Normal;
-        let physical = if mu[22] > 0.5 { 1 } else { 0 };
-        let sheen_on = if physical == 1 && m.sheen > 0.0 { 1 } else { 0 };
-        let lit = mu[13] > 0.5;
-        // the program variant, in key_names order
-        let mut vals: Vec<i64> = vec![
-            if has_map { 1 } else { 0 },
-            points_uv,
-            if has_normal { 1 } else { 0 },
-            if opaque { 1 } else { 0 },
-            if m.tone_mapped { s.tone_mapping } else { 0 },
-            bits,
-            if s.output_linear { 1 } else { 0 },
-            if m.premultiplied_alpha { 1 } else { 0 },
-            if has_emap { 1 } else { 0 },
-            if dashed { 1 } else { 0 },
-            0,
-            if instances > 0 { 1 } else { 0 },
-            if has_disp { 1 } else { 0 },
-            if sprite { 1 } else { 0 },
-            mu[15] as i64,
-            if lit { 1 } else { 0 },
-            if mu[14] > 0.5 { 1 } else { 0 },
-            physical,
-            if mu[17] > 0.5 { 1 } else { 0 },
-            sheen_on,
-            0,
-            0,
-            if mu[19] > 0.5 { self.fog_kind } else { 0 },
-            0,
-            env_mode,
-            0,
-        ];
-        vals[21] = if self.light_counts[5] > 0 { 1 } else { 0 };
-        vals[20] = if physical == 1 && trans > 0.0 { 1 } else { 0 };
-        for k in 0..6 {
-            vals.push(if lit { self.light_counts[k] } else { 0 });
-        }
-        if sp != 0 {
-            // a shadow caster keeps only what decides its discards
-            let keep: Vec<i64> = vec![0, 1, 3, 9, 11, 12];
-            let mut v2: Vec<i64> = vec![0; vals.len()];
-            for k in keep.iter() {
-                v2[*k as usize] = vals[*k as usize];
-            }
-            v2[5] = bits & 1;
-            v2[23] = 1;
-            vals = v2;
-        } else {
-            vals[10] = if o.receive_shadow && self.has_shadows { 1 } else { 0 };
-            vals[25] = if vals[10] == 1 { self.sh_slots } else { 0 };
-        }
+        // the program variant (plan::program_key, shared with the WebGL2 backend)
+        let mut vi = VariantInputs::new();
+        vi.has_map = has_map;
+        vi.points_uv = points_uv == 1;
+        vi.has_normal = has_normal;
+        vi.maps = bits;
+        vi.has_emap = has_emap;
+        vi.instanced = instances > 0;
+        vi.has_disp = has_disp;
+        vi.sprite = sprite;
+        vi.receive = o.receive_shadow && self.has_shadows;
+        vi.transmission = trans > 0.0;
+        vi.env_mode = env_mode;
+        vi.shadow_pass = sp != 0;
+        vi.tone = s.tone_mapping;
+        vi.linear_out = s.output_linear;
+        vi.fog_kind = self.fog_kind;
+        vi.sh_slots = self.sh_slots;
+        vi.light_counts = self.light_counts.clone();
+        let vals = program_key(&m, &mu, &vi);
         if shader {
             if !self.use_shader(c, frame, &m, &o.matrix_world, instances > 0, colored, data) {
                 return;
@@ -2298,7 +2267,7 @@ impl GpuRenderer {
         }
         c.uniform_int(self.loc("u_hasDisp"), if has_disp { 1 } else { 0 });
         c.uniform(self.loc("u_bumpScale"), U_FLOAT, &vec![m.bump_scale]);
-        if sheen_on == 1 {
+        if vals[19] == 1 {
             let sr = if m.sheen_roughness < 0.0001 {
                 0.0001
             } else if m.sheen_roughness > 1.0 {
