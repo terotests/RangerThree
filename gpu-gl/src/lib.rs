@@ -169,6 +169,7 @@ impl Player {
                                 t
                             }
                         };
+                        (gl.ActiveTexture)(TEXTURE0 + 31); // uploads on a unit no program samples
                         (gl.BindTexture)(tgt, t);
                         (gl.PixelStorei)(UNPACK_ALIGNMENT, 1);
                         let (internal, format, ty, w, h) = (a[2] as GLint, a[3] as GLenum, a[4] as GLenum, a[5] as GLsizei, a[6] as GLsizei);
@@ -193,6 +194,7 @@ impl Player {
                         }
                         (gl.PixelStorei)(UNPACK_ALIGNMENT, 4);
                         (gl.BindTexture)(tgt, 0);
+                        (gl.ActiveTexture)(TEXTURE0);
                         self.objs.insert(tid, Obj::Texture { tex: t });
                     }
                     4 => {
@@ -410,6 +412,20 @@ impl Player {
                         if status != FRAMEBUFFER_COMPLETE {
                             return Err(format!("gpu-gl: target {} is incomplete (0x{:x})", a[0], status));
                         }
+                    }
+                    14 => {
+                        // MIPMAPS texture
+                        let id = at(ints, i)?;
+                        i += 1;
+                        let tex = match self.objs.get(&id) {
+                            Some(Obj::Texture { tex }) => *tex,
+                            _ => return Err(format!("gpu-gl: id {} is not a texture", id)),
+                        };
+                        (gl.ActiveTexture)(TEXTURE0 + 31);
+                        (gl.BindTexture)(TEXTURE_2D, tex);
+                        (gl.GenerateMipmap)(TEXTURE_2D);
+                        (gl.BindTexture)(TEXTURE_2D, 0);
+                        (gl.ActiveTexture)(TEXTURE0);
                     }
                     13 => {
                         // COPY source, destination, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter

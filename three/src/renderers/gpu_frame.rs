@@ -3,14 +3,17 @@
 //! (js/three-webgl.js), so any executor (WebGL2, OpenGL ES 3 / GL 3.3,
 //! later WebGPU) draws the same pixels without frame logic of its own.
 //!
-//! Covered so far: meshes, instanced meshes, sprites, lines (dashed too) and points with every
-//! material kind the main program shades and its texture maps; all light
-//! kinds except rect area lights; fog, tone mapping, output colour space,
-//! blending, sides, wireframe, draw ranges and groups. A frame that needs
-//! more (an environment, shadow maps, transmission, morph targets, a
-//! texture background) is reported in `GpuFrame::missing`,
-//! and the host draws it with the WebGL2 backend until those parts move
-//! here too.
+//! Covered: every playground example and the test scenes of
+//! tests/gpu-compare.mjs, pixel for pixel: meshes, instanced meshes,
+//! sprites, lines (dashed too) and points with every material kind the
+//! main program shades and their texture maps; all light kinds with rect
+//! area lights; shadow maps (PCF, basic, VSM, point light cubes); scene and
+//! material environments (prefiltered as three.js's PMREM, or equirect);
+//! texture and blurred backgrounds; transmission; fog, tone mapping, output
+//! colour space, blending, sides, wireframe, draw ranges and groups. What a
+//! frame needs beyond that (morph targets, shader materials) is reported in
+//! `GpuFrame::missing`, and the host draws such a frame with the WebGL2
+//! backend.
 //!
 //! Texture pixels come from the host, which decodes images its own way (the
 //! browser's image and canvas decoders, a native PNG decoder, a canvas 2D
@@ -22,12 +25,13 @@
 use ranger::prelude::*;
 
 use crate::core::object3d::{Background, MeshData, ObjectKind, ObjectRef};
-use crate::materials::material::{Blending, Material, MaterialKind, MaterialRef};
+use crate::materials::material::{Blending, Material, MaterialKind, MaterialRef, Side};
 use crate::maths::color::{linear_to_srgb, Color};
 use crate::maths::matrix4::Matrix4;
 use crate::renderers::dfg_table::dfg_table;
+use crate::renderers::ltc_table::{ltc_1, ltc_2};
 use crate::renderers::gpu::{GpuCommands, U_FLOAT, U_MAT3, U_MAT4, U_VEC2, U_VEC3, U_VEC4};
-use crate::renderers::plan::{material_uniforms, map_transform, plan_frame, shadow_plans, DrawItem, LIGHT_STRIDE};
+use crate::renderers::plan::{material_uniforms, map_transform, plan_frame, shadow_plans, DrawItem, RenderPlan, LIGHT_STRIDE};
 use crate::renderers::shaders::{background_fs, full_vs, key_names, main_fragment, main_vertex, pmrem_fs, uniform_names, vsm_blur_fs, MAX_LIGHTS};
 use crate::core::object3d::visible_descendants;
 use crate::maths::color::ColorSpace;
@@ -72,6 +76,11 @@ pub struct GpuSettings {
     pub half_float: bool,
     /// shadowMap.type: 0 basic, 1 PCF, 2 PCF soft (drawn as PCF), 3 VSM
     pub shadow_type: i64,
+    /// float textures filter (WebGL2: OES_texture_float_linear): the rect
+    /// area light tables are RGBA32F then, else RGBA16F
+    pub float_linear: bool,
+    /// multisampling of the transmission target (three.js: min(4, MAX_SAMPLES))
+    pub samples: i64,
 }
 
 impl GpuSettings {
@@ -88,6 +97,8 @@ impl GpuSettings {
             shadows: false,
             half_float: false,
             shadow_type: 1,
+            float_linear: false,
+            samples: 4,
         }
     }
 }
@@ -153,6 +164,15 @@ fn no_shadow_res() -> ShadowRes {
     ShadowRes { w: 0, h: 0, kind: 0, point: false, depth: 0, targets: Vec::new(), pass: 0, pass_t: 0, map: 0, map_t: 0 }
 }
 
+/// A frame's texture background, for passes that draw it again.
+#[derive(Clone)]
+struct BackgroundUse {
+    tex: Option<TextureRef>,
+    blur: f64,
+    intensity: f64,
+    rotation: Euler,
+}
+
 /// The environment a draw uses: its texture, whether it is prefiltered
 /// (standard and physical materials) and whether it is the scene's.
 #[derive(Clone)]
@@ -212,6 +232,19 @@ pub struct GpuRenderer {
     shadow_param: Vec<f64>,
     shadow_size: Vec<f64>,
     vsm_prog: i64,
+    /// the rect area light tables (renderers/ltc_table.rs) side by side, made on first use
+    ltc: i64,
+    /// transmission: the multisampled target, its resolve target and
+    /// mipmapped texture, their size; the texture draws sample (0 none),
+    /// u_transSize once set, and the side the back-face pass forces (-1 none)
+    trans_ms: i64,
+    trans_res: i64,
+    trans_store: i64,
+    trans_w: i64,
+    trans_h: i64,
+    trans_tex: i64,
+    trans_size: Vec<f64>,
+    draw_side: i64,
     names: Vec<String>,
     dfg: i64,
     shadow_flat: i64,
@@ -414,6 +447,15 @@ impl GpuRenderer {
             shadow_param: Vec::new(),
             shadow_size: Vec::new(),
             vsm_prog: 0,
+            ltc: 0,
+            trans_ms: 0,
+            trans_res: 0,
+            trans_store: 0,
+            trans_w: 0,
+            trans_h: 0,
+            trans_tex: 0,
+            trans_size: Vec::new(),
+            draw_side: -1,
             names: uniform_names(),
             dfg: 0,
             shadow_flat: 0,
@@ -1105,11 +1147,87 @@ impl GpuRenderer {
         c.uniform(self.loc("u_fog"), U_VEC4, &vec![f[51], f[52], f[53], f[54], f[55], f[56], f[57], f[58]]);
         c.uniform(self.loc("u_pointScale"), U_FLOAT, &vec![f[59]]);
         c.uniform(self.loc("u_exposure"), U_FLOAT, &vec![f[60]]);
+        if !self.trans_size.is_empty() {
+            c.uniform(self.loc("u_transSize"), U_VEC2, &self.trans_size);
+        }
         if !self.shadow_mat.is_empty() {
             c.uniform(self.loc("u_shMat"), U_MAT4, &self.shadow_mat);
             c.uniform(self.loc("u_shParam"), U_VEC4, &self.shadow_param);
             c.uniform(self.loc("u_shSize"), U_VEC4, &self.shadow_size);
         }
+    }
+
+    /// The opaque scene (and background) drawn linear and untoned into a
+    /// multisampled target, resolved to a mipmapped texture that
+    /// transmissive materials sample (three.js's renderTransmissionPass);
+    /// double-sided transmissive objects add their back faces.
+    #[allow(clippy::too_many_arguments)]
+    fn transmission_pass(&mut self, c: &mut GpuCommands, frame: &mut GpuFrame, plan: &RenderPlan, bg: &BackgroundUse, opaque: &Vec<DrawItem>, transmissive: &Vec<DrawItem>, s: &GpuSettings) {
+        let w = s.width;
+        let h = s.height;
+        if self.trans_ms == 0 || self.trans_w != w || self.trans_h != h {
+            if self.trans_ms != 0 {
+                c.release(self.trans_ms);
+                c.release(self.trans_res);
+                c.release(self.trans_store);
+            }
+            let fmt = if s.half_float { 34842 } else { 32856 };
+            self.trans_ms = self.id();
+            c.target(self.trans_ms, w, h, s.samples, 2, fmt, 2, 33190);
+            self.trans_store = self.id();
+            c.texture(self.trans_store, &vec![0, fmt, 6408, if s.half_float { 5131 } else { 5121 }, w, h, 9987, GL_LINEAR, GL_CLAMP, GL_CLAMP, 0], &Vec::new());
+            self.trans_res = self.id();
+            c.target(self.trans_res, w, h, 0, 1, self.trans_store, 0, 0);
+            self.trans_w = w;
+            self.trans_h = h;
+        }
+        // the clear colour in linear; a see-through clear becomes white at half alpha
+        let cl = plan.clear;
+        let rgba = if plan.clear_alpha < 1.0 { vec![1.0, 1.0, 1.0, 0.5] } else { vec![cl.r, cl.g, cl.b, plan.clear_alpha] };
+        c.pass(self.trans_ms, w, h, 3, &rgba, 1.0);
+        let mut ls = s.clone();
+        ls.tone_mapping = 0;
+        ls.output_linear = true;
+        if let Some(t) = &bg.tex {
+            self.background(c, t, bg.blur, bg.intensity, &bg.rotation, &plan.view, &plan.projection, &ls);
+        }
+        for it in opaque.iter() {
+            self.draw(c, frame, it, &None, &ls);
+        }
+        self.trans_resolve(c, w, h);
+        let mut back = false;
+        for it in transmissive.iter() {
+            let mut double = false;
+            if let Some(m) = first_material(&it.object) {
+                double = m.borrow().side == Side::Double;
+            }
+            if !double {
+                continue;
+            }
+            if !back {
+                self.trans_tex = self.trans_store;
+                back = true;
+            }
+            self.draw_side = 1;
+            self.draw(c, frame, it, &None, &ls);
+            self.draw_side = -1;
+        }
+        if back {
+            self.trans_resolve(c, w, h);
+        }
+        c.pass(0, w, h, 0, &vec![0.0, 0.0, 0.0, 0.0], 1.0);
+        self.trans_tex = self.trans_store;
+        c.bind(14, self.trans_store, false);
+        self.trans_size = vec![w as f64, h as f64];
+        self.fver += 1;
+    }
+
+    fn trans_resolve(&self, c: &mut GpuCommands, w: i64, h: i64) {
+        c.copy(self.trans_ms, self.trans_res, &vec![0, 0, w, h, 0, 0, w, h], 16384, 9728);
+        c.mipmaps(self.trans_store);
+        c.bind(14, self.trans_store, false);
+        // drawing goes on into the multisampled target
+        c.pass(self.trans_ms, w, h, 0, &vec![0.0, 0.0, 0.0, 0.0], 1.0);
     }
 
     /// Every shadow sampler needs a texture of its kind bound even when no
@@ -1456,8 +1574,24 @@ impl GpuRenderer {
                 }
             }
         }
-        if counts[5] > 0 {
-            missing.push(String::from("rect area lights"));
+        if counts[5] > 0 && self.ltc == 0 {
+            // both tables side by side (64 x 64 each); lookups stay half a texel inside each, so they never mix
+            let l1 = ltc_1();
+            let l2 = ltc_2();
+            let mut both: Vec<f64> = vec![0.0; 128 * 64 * 4];
+            for ly in 0..64 {
+                for lx in 0..64 {
+                    for lc in 0..4 {
+                        both[(ly * 128 + lx) * 4 + lc] = l1[(ly * 64 + lx) * 4 + lc];
+                        both[(ly * 128 + 64 + lx) * 4 + lc] = l2[(ly * 64 + lx) * 4 + lc];
+                    }
+                }
+            }
+            self.ltc = self.id();
+            c.texture(self.ltc, &vec![0, if s.float_linear { 34836 } else { 34842 }, 6408, 5126, 128, 64, 9728, GL_LINEAR, GL_CLAMP, GL_CLAMP, 0], &both);
+        }
+        if self.ltc != 0 {
+            c.bind(10, self.ltc, false);
         }
         self.lights = lights;
         self.light_counts = counts;
@@ -1475,16 +1609,22 @@ impl GpuRenderer {
         } else {
             0
         };
-        // three.js's lists: opaque, transmissive (back to front), transparent
+        // three.js's lists: opaque, transmissive (by depth), transparent
         let mut opaque: Vec<DrawItem> = Vec::new();
+        let mut transmissive: Vec<DrawItem> = Vec::new();
         let mut transparent: Vec<DrawItem> = Vec::new();
         for it in plan.items.iter() {
-            let mut transmissive = false;
+            let mut is_trans = false;
             if let Some(m) = first_material(&it.object) {
-                transmissive = m.borrow().transmission > 0.0;
+                is_trans = m.borrow().transmission > 0.0;
             }
-            if transmissive {
-                missing.push(String::from("transmission"));
+            if is_trans {
+                // insertion keeps equal depths in list order (a stable sort)
+                let mut at = transmissive.len();
+                while at > 0 && transmissive[at - 1].depth > it.depth {
+                    at -= 1;
+                }
+                transmissive.insert(at, it.clone());
             } else if it.transparent {
                 transparent.push(it.clone());
             } else {
@@ -1492,7 +1632,15 @@ impl GpuRenderer {
             }
         }
         let mut frame = GpuFrame { commands: GpuCommands::new(), missing: Vec::new(), calls: 0, triangles: 0, lines: 0, points: 0 };
+        self.trans_tex = 0;
+        if !transmissive.is_empty() && override_mat.is_none() {
+            let bg = BackgroundUse { tex: bg_tex.clone(), blur: bg_blur, intensity: bg_intensity, rotation: bg_rotation };
+            self.transmission_pass(&mut c, &mut frame, &plan, &bg, &opaque, &transmissive, s);
+        }
         for it in opaque.iter() {
+            self.draw(&mut c, &mut frame, it, &override_mat, s);
+        }
+        for it in transmissive.iter() {
             self.draw(&mut c, &mut frame, it, &override_mat, s);
         }
         for it in transparent.iter() {
@@ -1707,6 +1855,7 @@ impl GpuRenderer {
             }
         }
         let sp = self.shadow_pass;
+        let trans = if self.trans_tex != 0 { m.transmission } else { 0.0 };
         let env_mode = if sp != 0 { 0 } else { self.env_bind(c, &m) };
         let points_uv = if kind == 6 && !has_uv { 1 } else { 0 };
         let opaque = !m.transparent && m.blending == Blending::Normal;
@@ -1741,6 +1890,8 @@ impl GpuRenderer {
             0,
             env_mode,
         ];
+        vals[21] = if self.light_counts[5] > 0 { 1 } else { 0 };
+        vals[20] = if physical == 1 && trans > 0.0 { 1 } else { 0 };
         for k in 0..6 {
             vals.push(if lit { self.light_counts[k] } else { 0 });
         }
@@ -1793,7 +1944,13 @@ impl GpuRenderer {
         } else {
             c.uniform(self.loc("u_sheen"), U_VEC4, &vec![0.0, 0.0, 0.0, 0.0]);
         }
-        c.uniform(self.loc("u_trans"), U_VEC4, &vec![0.0, 0.0, 0.0, 0.0]);
+        if trans > 0.0 {
+            let ad = m.attenuation_distance;
+            c.uniform(self.loc("u_trans"), U_VEC4, &vec![trans, m.thickness, m.ior, if ad > 0.0 && ad < 1.0e300 { ad } else { 0.0 }]);
+            c.uniform(self.loc("u_attColor"), U_VEC3, &vec![m.attenuation_color.r, m.attenuation_color.g, m.attenuation_color.b]);
+        } else {
+            c.uniform(self.loc("u_trans"), U_VEC4, &vec![0.0, 0.0, 0.0, 0.0]);
+        }
         c.uniform_int(self.loc("u_instanced"), if instances > 0 { 1 } else { 0 });
         c.uniform_int(self.loc("u_sprite"), if sprite { 1 } else { 0 });
         if sprite {
@@ -1855,7 +2012,7 @@ impl GpuRenderer {
         } else {
             GL_TRIANGLES
         };
-        let mut side = mu[16] as i64;
+        let mut side = if self.draw_side >= 0 { self.draw_side } else { mu[16] as i64 };
         let mut passes: Vec<i64> = vec![side];
         if sp != 0 {
             // shadow side: the material's shadowSide, else front <-> back (VSM keeps the side)

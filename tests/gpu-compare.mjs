@@ -94,7 +94,7 @@ for (const name of Object.keys(ctx.EXAMPLES)) {
     s.pixel_ratio = renderer._pixelRatio; s.tone_mapping = renderer.toneMapping | 0;
     s.exposure = renderer.toneMappingExposure === undefined ? 1 : renderer.toneMappingExposure;
     s.output_linear = renderer.outputColorSpace === "srgb-linear";
-    s.shadows = !!(renderer.shadowMap && renderer.shadowMap.enabled); s.half_float = !!gl.getExtension("EXT_color_buffer_float"); s.shadow_type = renderer.shadowMap ? renderer.shadowMap.type | 0 : 1; s.clear_color = renderer._soft.clear_color; s.clear_alpha = renderer._soft.clear_alpha;
+    s.shadows = !!(renderer.shadowMap && renderer.shadowMap.enabled); s.half_float = !!gl.getExtension("EXT_color_buffer_float"); s.shadow_type = renderer.shadowMap ? renderer.shadowMap.type | 0 : 1; s.float_linear = !!gl.getExtension("OES_texture_float_linear"); s.samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES)); s.clear_color = renderer._soft.clear_color; s.clear_alpha = renderer._soft.clear_alpha;
     let b, first = null; const pl = [], py = [];
     for (let i = 0; i < frames; i++) {
       const t0 = performance.now();

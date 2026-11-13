@@ -74,6 +74,7 @@
           // WebGL takes no view of a resizable buffer (the crate's growable Vec<u8>): copy then
           else if (dk === 2) px = bytes.buffer.resizable ? bytes.slice(off, off + dn) : bytes.subarray(off, off + dn);
           var t = obj[tid] ? obj[tid].tex : gl.createTexture();
+          gl.activeTexture(gl.TEXTURE31); // uploads on a unit no program samples
           gl.bindTexture(tgt, t);
           gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
           gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
@@ -91,6 +92,7 @@
           if (ints[i + 11] & 2) gl.generateMipmap(tgt);
           gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
           gl.bindTexture(tgt, null);
+          gl.activeTexture(gl.TEXTURE0);
           obj[tid] = { tex: t };
           i += 15;
           break;
@@ -219,6 +221,14 @@
           if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("gpu-webgl2: target " + gid + " is incomplete");
           gl.bindFramebuffer(gl.FRAMEBUFFER, null);
           obj[gid] = tg;
+          break;
+        }
+        case 14: { // MIPMAPS texture
+          gl.activeTexture(gl.TEXTURE31);
+          gl.bindTexture(gl.TEXTURE_2D, obj[ints[i++]].tex);
+          gl.generateMipmap(gl.TEXTURE_2D);
+          gl.bindTexture(gl.TEXTURE_2D, null);
+          gl.activeTexture(gl.TEXTURE0);
           break;
         }
         case 13: { // COPY source, destination, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter
