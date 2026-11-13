@@ -647,6 +647,7 @@ impl GpuRenderer {
             if mu[19] > 0.5 { self.fog_kind } else { 0 },
             0,
             0,
+            0,
         ];
         for k in 0..6 {
             vals.push(if lit { self.light_counts[k] } else { 0 });

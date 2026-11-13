@@ -30,7 +30,8 @@ pub fn spec_names() -> Vec<String> {
     ]
 }
 
-/// The main program's feature flags, in key order after `spec_names`: then
+/// The main program's feature flags, in key order after `spec_names`
+/// (`K_SHSLOTS`: bit per shadow map slot the frame fills, 1-4 the 2D slots 0-2, 8 the cube); then
 /// the light counts per kind (ambient, hemisphere, directional, point, spot,
 /// rect area), packed in that order.
 pub fn flag_names() -> Vec<String> {
@@ -46,6 +47,7 @@ pub fn flag_names() -> Vec<String> {
         String::from("K_FOG"),
         String::from("K_SHPASS"),
         String::from("K_ENV"),
+        String::from("K_SHSLOTS"),
         String::from("K_NAMB"),
         String::from("K_NHEMI"),
         String::from("K_NDIR"),
@@ -290,6 +292,11 @@ layout(location=7) in vec4 a_im3;
 layout(location=8) in vec3 a_icolor;
 layout(location=9) in float a_lineDistance;
 uniform sampler2D u_dispMap;
+#if u_hasDisp == 1
+#define T_DISP(uv) texture(u_dispMap, uv)
+#else
+#define T_DISP(uv) vec4(0.0)
+#endif
 uniform int u_hasDisp;
 uniform mat3 u_dispT;
 uniform float u_dispScale, u_dispBias, u_dashScale;
@@ -308,7 +315,7 @@ void main() {
   mat4 m = u_model;
   if (u_instanced == 1) m = u_model * mat4(a_im0, a_im1, a_im2, a_im3);
   vec3 pos = a_position;
-  if (u_hasDisp == 1) pos += normalize(a_normal) * (texture(u_dispMap, (u_dispT * vec3(a_uv, 1.0)).xy).x * u_dispScale + u_dispBias);
+  if (u_hasDisp == 1) pos += normalize(a_normal) * (T_DISP((u_dispT * vec3(a_uv, 1.0)).xy).x * u_dispScale + u_dispBias);
   v_lineDist = u_dashScale * a_lineDistance;
   vec4 w = m * vec4(pos, 1.0);
   v_world = w.xyz;
@@ -366,6 +373,81 @@ vec2 equirectUv(vec3 d) { return vec2(atan(d.z, d.x) * 0.1591549431 + 0.5, asin(
 pub fn main_fragment_template() -> String {
     let mut s = String::new();
     s.push_str(r#"precision highp float;
+// every texture read goes through a macro that is a constant when its feature is off, so a
+// variant's disabled samplers are not statically used: WebGL2 counts statically used samplers
+// against MAX_TEXTURE_IMAGE_UNITS (16 on Apple's Metal), even in branches that fold away
+#if u_hasMap == 1
+#define T_MAP(uv) texture(u_map, uv)
+#else
+#define T_MAP(uv) vec4(1.0)
+#endif
+#if (u_maps & 1) != 0
+#define T_ALPHA(uv) texture(u_alphaMap, uv)
+#else
+#define T_ALPHA(uv) vec4(1.0)
+#endif
+#if (u_maps & 2) != 0
+#define T_ROUGH(uv) texture(u_roughMap, uv)
+#else
+#define T_ROUGH(uv) vec4(1.0)
+#endif
+#if (u_maps & 4) != 0
+#define T_METAL(uv) texture(u_metalMap, uv)
+#else
+#define T_METAL(uv) vec4(1.0)
+#endif
+#if (u_maps & 8) != 0
+#define T_NORMAL(uv) texture(u_normalMap, uv)
+#else
+#define T_NORMAL(uv) vec4(0.5, 0.5, 1.0, 1.0)
+#endif
+#if (u_maps & 16) != 0
+#define T_AO(uv) texture(u_aoMap, uv)
+#else
+#define T_AO(uv) vec4(1.0)
+#endif
+#if (u_maps & 32) != 0
+#define T_MATCAP(uv) texture(u_matcap, uv)
+#else
+#define T_MATCAP(uv) vec4(1.0)
+#endif
+#if (u_maps & 64) != 0
+#define T_GRAD(uv) texture(u_gradMap, uv)
+#else
+#define T_GRAD(uv) vec4(1.0)
+#endif
+#if (u_maps & 128) != 0
+#define T_BUMP(uv) texture(u_bumpMap, uv)
+#else
+#define T_BUMP(uv) vec4(0.0)
+#endif
+#if u_hasEmap == 1
+#define T_EMAP(uv) texture(u_emap, uv)
+#else
+#define T_EMAP(uv) vec4(1.0)
+#endif
+#if K_PHYS == 1
+#define T_DFG(uv) texture(u_dfg, uv)
+#else
+#define T_DFG(uv) vec4(0.0)
+#endif
+#if K_RECT == 1
+#define T_LTC(uv) texture(u_ltc, uv)
+#else
+#define T_LTC(uv) vec4(0.0)
+#endif
+#if K_ENV != 0
+#define T_ENVLOD(uv) textureLod(u_envMap, uv, 0.0)
+#define T_ENVGRAD(uv, dx, dy) textureGrad(u_envMap, uv, dx, dy)
+#else
+#define T_ENVLOD(uv) vec4(0.0)
+#define T_ENVGRAD(uv, dx, dy) vec4(0.0)
+#endif
+#if K_TRANS == 1
+#define T_TRANS(uv, lod) textureBicubic(u_transMap, uv, lod)
+#else
+#define T_TRANS(uv, lod) vec4(0.0)
+#endif
 in vec3 v_world; in vec3 v_normal; in vec2 v_uv; in vec2 v_uv0; in vec3 v_color; in float v_depth; in float v_lineDist;
 uniform int u_dashed;
 uniform float u_dashSize, u_dashTotal, u_bumpScale;
@@ -453,10 +535,38 @@ float ltcEvaluate(vec3 N, vec3 V, vec3 P, mat3 minv, vec3 rc[4]) {
 }
 float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715)))); }
 vec2 vogel(int i, float phi) { float r = sqrt((float(i) + 0.5) / 5.0); float t = float(i) * 2.399963229728653 + phi; return vec2(cos(t), sin(t)) * r; }
+#if u_receive == 1
 #if SHADOW_TYPE == 3
-vec2 shRG(int i, vec2 p) { if (i == 0) return texture(u_sh0, p).rg; if (i == 1) return texture(u_sh1, p).rg; return texture(u_sh2, p).rg; }
+vec2 shRG(int i, vec2 p) {
+#if (K_SHSLOTS & 1) != 0
+  if (i == 0) return texture(u_sh0, p).rg;
+#endif
+#if (K_SHSLOTS & 2) != 0
+  if (i == 1) return texture(u_sh1, p).rg;
+#endif
+#if (K_SHSLOTS & 4) != 0
+  if (i == 2) return texture(u_sh2, p).rg;
+#endif
+  return vec2(1.0);
+}
 #else
-float shTap(int i, vec3 p) { if (i == 0) return texture(u_sh0, p); if (i == 1) return texture(u_sh1, p); return texture(u_sh2, p); }
+float shTap(int i, vec3 p) {
+#if (K_SHSLOTS & 1) != 0
+  if (i == 0) return texture(u_sh0, p);
+#endif
+#if (K_SHSLOTS & 2) != 0
+  if (i == 1) return texture(u_sh1, p);
+#endif
+#if (K_SHSLOTS & 4) != 0
+  if (i == 2) return texture(u_sh2, p);
+#endif
+  return 1.0;
+}
+#if (K_SHSLOTS & 8) != 0
+#define T_SHC(p) texture(u_shc0, p)
+#else
+#define T_SHC(p) 1.0
+#endif
 #endif
 float shadowAt(int slot, vec3 nrm) {
   vec4 pr = u_shParam[slot], sz = u_shSize[slot];
@@ -473,10 +583,10 @@ float shadowAt(int slot, vec3 nrm) {
       vec3 tg = normalize(cross(bd, ad.x > ad.z ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0))); vec3 bt = cross(bd, tg);
       float phi = ign(gl_FragCoord.xy) * 6.283185307179586;
       shadow = 0.0;
-      for (int k = 0; k < 5; k++) { vec2 o = vogel(k, phi); shadow += texture(u_shc0, vec4(bd + (tg * o.x + bt * o.y) * texel, dp)); }
+      for (int k = 0; k < 5; k++) { vec2 o = vogel(k, phi); shadow += T_SHC(vec4(bd + (tg * o.x + bt * o.y) * texel, dp)); }
       shadow *= 0.2;
 #else
-      shadow = texture(u_shc0, vec4(bd, dp));
+      shadow = T_SHC(vec4(bd, dp));
 #endif
     }
 #endif
@@ -500,6 +610,9 @@ float shadowAt(int slot, vec3 nrm) {
   }
   return mix(1.0, shadow, pr.x);
 }
+#else
+float shadowAt(int slot, vec3 nrm) { return 1.0; }
+#endif
 float sheenAlbedo(float nv, float r) { float r2 = r * r, ri = 1.0 / (r + 0.1); float a = -1.9362 + 1.0678 * r + 0.4573 * r2 - 0.8469 * ri; float b = -0.6014 + 0.5538 * r - 0.4670 * r2 - 0.1255 * ri; return clamp(exp(a * clamp(nv, 0.0, 1.0) + b), 0.0, 1.0); }
 float envMip(float r) {
   if (r >= 0.8) return (1.0 - r) * 5.0 - 2.0; if (r >= 0.4) return (0.8 - r) * 7.5 - 1.0;
@@ -510,13 +623,13 @@ vec3 envLevel(vec3 d, float mipInt) {
   vec2 uv = faceUv(d, f) * (fs - 2.0) + 1.0;
   if (f > 2.0) { uv.y += fs; f -= 3.0; }
   uv.x += f * fs + fi * 48.0; uv.y += 4.0 * (exp2(u_envUV.x) - fs);
-  return textureLod(u_envMap, uv * u_envUV.yz, 0.0).rgb;
+  return T_ENVLOD(uv * u_envUV.yz).rgb;
 }
 vec3 envCubeUV(vec3 d, float r) { float m = clamp(envMip(r), -2.0, u_envUV.x), mf = fract(m), mi = floor(m); vec3 c = envLevel(d, mi); return mf == 0.0 ? c : mix(c, envLevel(d, mi + 1.0), mf); }
 vec3 envEquirect(vec3 d) {
   vec2 uv = equirectUv(d), dx = dFdx(uv), dy = dFdy(uv);
   dx.x -= floor(dx.x + 0.5); dy.x -= floor(dy.x + 0.5);
-  return textureGrad(u_envMap, uv, dx, dy).rgb;
+  return T_ENVGRAD(uv, dx, dy).rgb;
 }
 vec2 tuv(int i) { return (u_t[i] * vec3(v_uv0, 1.0)).xy; }
 void main() {
@@ -528,10 +641,10 @@ void main() {
   if (u_hasMap == 1) {
     vec2 uv = v_uv;
     if (u_points == 1) uv = (u_uvt * vec3(gl_PointCoord.x, 1.0 - gl_PointCoord.y, 1.0)).xy;
-    vec4 t = texture(u_map, uv);
+    vec4 t = T_MAP(uv);
     albedo *= t.rgb; alpha *= t.a;
   }
-  if (has(1)) alpha *= texture(u_alphaMap, tuv(0)).g;
+  if (has(1)) alpha *= T_ALPHA(tuv(0)).g;
   if (alpha < c1.a) discard;
   if (u_opaque == 1) alpha = 1.0;
 #if K_SHPASS == 1
@@ -544,7 +657,7 @@ void main() {
   vec3 shN = u_hasNormal == 1 ? normalize(v_normal) : vec3(0.0, 0.0, 1.0);
   if (has(8)) {
     vec2 nuv = tuv(3);
-    vec3 mapN = texture(u_normalMap, nuv).xyz * 2.0 - 1.0; mapN.xy *= u_normalScale;
+    vec3 mapN = T_NORMAL(nuv).xyz * 2.0 - 1.0; mapN.xy *= u_normalScale;
     vec3 q0 = dFdx(v_world), q1 = dFdy(v_world); vec2 st0 = dFdx(nuv), st1 = dFdy(nuv);
     vec3 q1p = cross(q1, n), q0p = cross(n, q0);
     vec3 tt = q1p * st0.x + q0p * st1.x, bb = q1p * st0.y + q0p * st1.y;
@@ -554,18 +667,18 @@ void main() {
     n = normalize(mat3(tt, bb, n) * mapN);
   } else if (has(128)) {
     vec2 buv = tuv(5), sx = dFdx(buv), sy = dFdy(buv);
-    float hll = u_bumpScale * texture(u_bumpMap, buv).x;
-    vec2 dh = vec2(u_bumpScale * texture(u_bumpMap, buv + sx).x - hll, u_bumpScale * texture(u_bumpMap, buv + sy).x - hll);
+    float hll = u_bumpScale * T_BUMP(buv).x;
+    vec2 dh = vec2(u_bumpScale * T_BUMP(buv + sx).x - hll, u_bumpScale * T_BUMP(buv + sy).x - hll);
     vec3 sgx = normalize(dFdx(v_world)), sgy = normalize(dFdy(v_world));
     vec3 r1 = cross(sgy, n), r2 = cross(n, sgx);
     float det = dot(sgx, r1) * (gl_FrontFacing ? 1.0 : -1.0);
     n = normalize(abs(det) * n - sign(det) * (dh.x * r1 + dh.y * r2));
   }
-  float ao = has(16) ? (texture(u_aoMap, tuv(4)).r - 1.0) * u_aoIntensity + 1.0 : 1.0;
+  float ao = has(16) ? (T_AO(tuv(4)).r - 1.0) * u_aoIntensity + 1.0 : 1.0;
   vec3 color;
   float transAlpha = 1.0;
   vec3 emissive = c1.rgb;
-  if (u_hasEmap == 1) { vec3 e = texture(u_emap, (u_euvt * vec3(v_uv0, 1.0)).xy).rgb; emissive *= e; }
+  if (u_hasEmap == 1) { vec3 e = T_EMAP((u_euvt * vec3(v_uv0, 1.0)).xy).rgb; emissive *= e; }
   if (mode == 3) {
     color = vec3(1.0 - gl_FragCoord.z);
   } else if (mode == 2) {
@@ -586,7 +699,7 @@ void main() {
     vec3 vd = normalize(-(u_view * vec4(v_world, 1.0)).xyz);
     vec3 mx = normalize(vec3(vd.z, 0.0, -vd.x)); vec3 my = cross(vd, mx);
     vec2 muv = vec2(dot(mx, vn), dot(my, vn)) * 0.495 + 0.5;
-    color = albedo * (has(32) ? texture(u_matcap, muv).rgb : vec3(mix(0.2, 0.8, muv.y)));
+    color = albedo * (has(32) ? T_MATCAP(muv).rgb : vec3(mix(0.2, 0.8, muv.y)));
   } else if (K_LIT == 0) {
     color = albedo * ao;
   } else {
@@ -594,14 +707,14 @@ void main() {
     vec3 dif = vec3(0.0), ind = vec3(0.0), spec = vec3(0.0), pspec = vec3(0.0), rectDif = vec3(0.0);
     const bool physical = K_PHYS == 1;
     float rough = c5.x, metal = c5.y, dscale = c3.x;
-    if (has(2)) rough *= texture(u_roughMap, tuv(1)).g;
-    if (has(4)) metal *= texture(u_metalMap, tuv(2)).b;
+    if (has(2)) rough *= T_ROUGH(tuv(1)).g;
+    if (has(4)) metal *= T_METAL(tuv(2)).b;
     vec3 vn0 = (u_view * vec4(n0, 0.0)).xyz;
     vec3 dxy = max(abs(dFdx(vn0)), abs(dFdy(vn0)));
     if (physical) { rough = min(max(rough, 0.0525) + max(max(dxy.x, dxy.y), dxy.z), 1.0); dscale = 1.0 - metal; }
     vec3 f0 = mix(vec3(0.04), albedo, metal);
     float nv = clamp(dot(n, toEye), 0.0, 1.0);
-    vec2 dfgV = texture(u_dfg, vec2(rough, nv)).rg;
+    vec2 dfgV = T_DFG(vec2(rough, nv)).rg;
     const bool sheenOn = K_SHEEN == 1;
     float shR = max(u_sheen.a, 0.0001), shMax = max(u_sheen.r, max(u_sheen.g, u_sheen.b));
     vec3 sheenSpec = vec3(0.0);
@@ -630,7 +743,7 @@ void main() {
       vec3 ray = normalize(refract(-toEye, n, 1.0 / ior)) * u_trans.y * scale;
       vec4 ndc = u_proj * u_view * vec4(v_world + ray, 1.0);
       vec2 rc = (ndc.xy / ndc.w + 1.0) / 2.0;
-      vec4 tl = textureBicubic(u_transMap, rc, log2(u_transSize.x) * rough * clamp(ior * 2.0 - 2.0, 0.0, 1.0));
+      vec4 tl = T_TRANS(rc, log2(u_transSize.x) * rough * clamp(ior * 2.0 - 2.0, 0.0, 1.0));
       vec3 tm = albedo * dscale;
       if (u_trans.w > 0.0) tm *= exp(log(u_attColor) / u_trans.w * length(ray));
       vec3 F = f0 * dfgV.x + dfgV.y;
@@ -673,7 +786,7 @@ pub fn light_body() -> String {
           vec3 hw = u_lights[i * 7 + 5].xyz, hh = u_lights[i * 7 + 6].xyz, lc = l0.rgb * l1.w;
           vec3 rc[4]; rc[0] = l2.xyz + hw - hh; rc[1] = l2.xyz - hw - hh; rc[2] = l2.xyz - hw + hh; rc[3] = l2.xyz + hw + hh;
           vec2 luv = vec2(rough, sqrt(1.0 - nv)) * (63.0 / 64.0) + 0.5 / 64.0;
-          vec4 t1 = texture(u_ltc, vec2(luv.x * 0.5, luv.y)), t2 = texture(u_ltc, vec2(luv.x * 0.5 + 0.5, luv.y));
+          vec4 t1 = T_LTC(vec2(luv.x * 0.5, luv.y)), t2 = T_LTC(vec2(luv.x * 0.5 + 0.5, luv.y));
           mat3 minv = mat3(vec3(t1.x, 0.0, t1.y), vec3(0.0, 1.0, 0.0), vec3(t1.z, 0.0, t1.w));
           pspec += lc * (f0 * t2.x + (1.0 - f0) * t2.y) * ltcEvaluate(n, toEye, v_world, minv, rc);
           rectDif += lc * ltcEvaluate(n, toEye, v_world, mat3(1.0), rc);
@@ -701,7 +814,7 @@ pub fn light_body() -> String {
         diffuse = vec3(max(nl, 0.0));
         if (mode == 1) {
           vec2 coord = vec2(nl * 0.5 + 0.5, 0.0);
-          if (has(64)) diffuse = vec3(texture(u_gradMap, coord).r);
+          if (has(64)) diffuse = vec3(T_GRAD(coord).r);
           else { float fw = fwidth(coord.x) * 0.5; diffuse = vec3(mix(0.7, 1.0, smoothstep(0.7 - fw, 0.7 + fw, coord.x))); }
         }
         if (sheenOn) {
@@ -721,7 +834,7 @@ pub fn light_body() -> String {
           float gv = nlc * sqrt(a2 + (1.0 - a2) * nv * nv), gl = nv * sqrt(a2 + (1.0 - a2) * nlc * nlc);
           float V = 0.5 / max(gv + gl, 1e-6);
           float dd = nh * nh * (a2 - 1.0) + 1.0; float D = 0.3183098862 * a2 / (dd * dd);
-          vec2 dfgL = texture(u_dfg, vec2(rough, nlc)).rg;
+          vec2 dfgL = T_DFG(vec2(rough, nlc)).rg;
           vec3 fssV = f0 * dfgV.x + dfgV.y, fssL = f0 * dfgL.x + dfgL.y;
           float emsV = 1.0 - (dfgV.x + dfgV.y), emsL = 1.0 - (dfgL.x + dfgL.y);
           vec3 favg = f0 + (1.0 - f0) * 0.047619;
