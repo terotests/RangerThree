@@ -453,34 +453,29 @@ impl Wgsl {
         self.toks = Vec::new();
         self.kinds = Vec::new();
         self.pos = 0;
+        // line by line: slicing a whole program by byte offsets re-encodes it per slice in JavaScript
+        for line in src.split("\n") {
+            let t = line.trim().to_string();
+            if t.starts_with("#") {
+                // a directive (#version / #extension): not WGSL
+                continue;
+            }
+            self.lex_line(line);
+        }
+    }
+
+    fn lex_line(&mut self, src: &str) {
         let b = src.as_bytes();
         let n = b.len();
         let mut i: usize = 0;
-        let mut line_start = true;
         while i < n {
             let c = b[i];
-            if c == 10 {
-                line_start = true;
-                i += 1;
-                continue;
-            }
             if c == 32 || c == 9 || c == 13 {
                 i += 1;
                 continue;
             }
-            if line_start && c == 35 {
-                // a directive line (#version / #extension): not WGSL
-                while i < n && b[i] != 10 {
-                    i += 1;
-                }
-                continue;
-            }
-            line_start = false;
             if c == 47 && i + 1 < n && b[i + 1] == 47 {
-                while i < n && b[i] != 10 {
-                    i += 1;
-                }
-                continue;
+                break;
             }
             let s = i;
             if is_ident_start(c) {
@@ -492,11 +487,12 @@ impl Wgsl {
                 continue;
             }
             if (c >= 48 && c <= 57) || (c == 46 && i + 1 < n && b[i + 1] >= 48 && b[i + 1] <= 57) {
+                let hex = c == 48 && i + 1 < n && (b[i + 1] == 120 || b[i + 1] == 88);
                 while i < n {
                     let d = b[i];
                     if is_ident_byte(d) || d == 46 {
                         i += 1;
-                    } else if (d == 45 || d == 43) && (b[i - 1] == 101 || b[i - 1] == 69) && !(src[s..i].starts_with("0x")) {
+                    } else if (d == 45 || d == 43) && (b[i - 1] == 101 || b[i - 1] == 69) && !hex {
                         i += 1;
                     } else {
                         break;

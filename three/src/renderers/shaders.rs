@@ -162,24 +162,18 @@ fn is_spec_uniform(line: &str, spec: &Vec<String>) -> bool {
 
 /// `src` without the `uniform int` lines of the uniforms in `spec` (they are #defines in a variant).
 fn strip_spec_uniforms(src: &str, spec: &Vec<String>) -> String {
+    // line by line (slicing the whole source by byte offsets re-encodes it per slice in JavaScript)
     let mut out = String::new();
-    let mut start: usize = 0;
-    let bytes = src.as_bytes();
-    let n = bytes.len();
-    let mut i: usize = 0;
-    while i < n {
-        if bytes[i] == 10 {
-            let line = src[start..i].to_string();
-            if !is_spec_uniform(&line, spec) {
-                out.push_str(&line);
-                out.push_str("\n");
-            }
-            start = i + 1;
+    let mut first = true;
+    for line in src.split("\n") {
+        if is_spec_uniform(line, spec) {
+            continue;
         }
-        i += 1;
-    }
-    if start < n {
-        out.push_str(&src[start..n]);
+        if !first {
+            out.push_str("\n");
+        }
+        out.push_str(line);
+        first = false;
     }
     out
 }
