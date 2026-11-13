@@ -17,6 +17,12 @@ facade.
   when it is given `{ software: true }`; `renderer.backend` says which.
   Lighting follows three.js's units (Lambert diffuse is albedo / pi), so
   scenes light the same as in three.js.
+- `gpu-gl/` plays the GPU command stream (`renderers/gpu.rs`) on GLES 3 /
+  GL 3.3 from Rust; `gpu-android/` is the same player in Kotlin
+  (`player/GpuPlayer.kt` over a small `Gl` interface), with
+  `android/AndroidGl.kt` for android.opengl.GLES30 and a JVM host
+  (`jvm/`, JNA over Mesa EGL) for headless tests. Android runs the crate as
+  Ranger's Kotlin output plus that player.
 - `playground/` is the browser playground that GitHub Pages publishes on
   every push to `main` (`.github/workflows/playground.yml`).
 - `parity/` is the value meter (`node parity/value.mjs`), and `tests/` holds
@@ -27,6 +33,7 @@ facade.
     bash scripts/build-js.sh           # build/rangerthree-core.js
     bash scripts/build-playground.sh   # build/site
     cargo build --workspace
+    bash gpu-android/test.sh           # Kotlin crate + Kotlin player, headless
 
 The scripts fetch Ranger at the commit pinned in `deps.json`. To use your
 own checkout, set `RANGER_DIR=/path/to/Ranger`.
