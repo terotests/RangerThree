@@ -25,7 +25,7 @@
 //!
 //! | op | name | ints | floats |
 //! |---|---|---|---|
-//! | 1 | BUFFER | id, kind (0 f32 vertex data, 1 u32 index), dynamic, n | kind 0: n values (kind 1: n ints follow in `ints`) |
+//! | 1 | BUFFER | id, kind (0 f32 vertex data, 1 u32 index, 2 f32 uniform block data), dynamic, n | kinds 0, 2: n values (kind 1: n ints follow in `ints`) |
 //! | 2 | PROGRAM | id, vs text, fs text, uniform count, then that many name texts | |
 //! | 3 | TEXTURE | id, cube, internal format, format, type, w, h, min filter, mag filter, wrap s, wrap t, flags (1 depth compare, 2 make mipmaps), data (0 none, 1 floats, 2 bytes), offset, n | data 1: n values; data 2: n bytes at offset in `bytes`, rows bottom first |
 //! | 4 | PASS | target (0 the screen), w, h, clear (bit 1 colour, 2 depth) | r, g, b, a, depth |
@@ -39,15 +39,19 @@
 //! | 12 | TARGET | id, w, h, samples, colour (0 none, 1 texture, 2 renderbuffer, 3 + f face f of a cube texture), colour texture id or internal format, depth (same), depth texture id or internal format | |
 //! | 13 | COPY | source target, destination target, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask (GL bits), filter (GL) | |
 //! | 14 | MIPMAPS | texture id (2D): its mipmaps made from level 0 | |
+//! | 15 | UBIND | block binding, buffer id, byte offset, byte size: a range of a kind 2 buffer at a uniform block binding | |
 //!
 //! An executor uploads textures and makes mipmaps on texture unit 31,
 //! which no program samples, so the units the stream bound stay as they are.
 //!
+//! Uniform blocks: after linking a program the executor gives each block it
+//! declares its binding, by name (`block_names`: `Frame` at 0), once; UBIND
+//! then points a binding at a buffer range, as a WebGPU bind group entry.
+//!
 //! The stream's shape follows WebGPU where that costs nothing (ids from the
 //! writer, programs made once and used by id, state set as one block, passes
-//! explicit). Uniforms are still set one by one by name, as the GLSL ES 3.00
-//! programs declare them; uniform blocks come with the shader modularisation's
-//! stage 4, and then a UNIFORM BLOCK command maps to WebGPU bind groups.
+//! explicit). The per-pass values are a uniform block; the per-draw ones are
+//! still set one by one by name, as the GLSL ES 3.00 programs declare them.
 
 use ranger::prelude::*;
 
@@ -65,6 +69,13 @@ pub const OP_RELEASE: i64 = 11;
 pub const OP_TARGET: i64 = 12;
 pub const OP_COPY: i64 = 13;
 pub const OP_MIPMAPS: i64 = 14;
+pub const OP_UBIND: i64 = 15;
+
+/// The uniform blocks an executor binds by name after linking, at their
+/// index in this list (`shaders::FRAME_BINDING` for `Frame`).
+pub fn block_names() -> Vec<String> {
+    vec![String::from("Frame")]
+}
 
 pub const U_FLOAT: i64 = 1;
 pub const U_VEC2: i64 = 2;
@@ -131,6 +142,27 @@ impl GpuCommands {
                 self.floats.push(*v);
             }
         }
+    }
+
+    /// Uniform block data (f32) in buffer `id`, for UBIND.
+    pub fn uniform_buffer(&mut self, id: i64, data: &Vec<f64>) {
+        self.op(OP_BUFFER);
+        self.ints.push(id);
+        self.ints.push(2);
+        self.ints.push(1);
+        self.ints.push(data.len() as i64);
+        for v in data.iter() {
+            self.floats.push(*v);
+        }
+    }
+
+    /// Points uniform block `binding` at `size` bytes of buffer `id` from `offset`.
+    pub fn ubind(&mut self, binding: i64, id: i64, offset: i64, size: i64) {
+        self.op(OP_UBIND);
+        self.ints.push(binding);
+        self.ints.push(id);
+        self.ints.push(offset);
+        self.ints.push(size);
     }
 
     /// A program from GLSL ES 3.00 sources; `names` are its uniforms, which
@@ -360,6 +392,8 @@ pub fn fixed_ints(op: i64) -> i64 {
         12
     } else if op == OP_MIPMAPS {
         1
+    } else if op == OP_UBIND {
+        4
     } else {
         -1
     }

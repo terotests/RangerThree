@@ -36,8 +36,8 @@ use crate::renderers::dfg_table::dfg_table;
 use crate::renderers::ltc_table::{ltc_1, ltc_2};
 use crate::renderers::gpu::{GpuCommands, U_FLOAT, U_MAT3, U_MAT4, U_VEC2, U_VEC3, U_VEC4};
 use crate::renderers::gpu_shader::{includes, shader_sources, uniform_declarations, CUSTOM_ATTRIB_BASE, MAX_ATTRIBS};
-use crate::renderers::plan::{material_uniforms, map_transform, plan_frame, shadow_plans, DrawItem, RenderPlan, LIGHT_STRIDE};
-use crate::renderers::shaders::{background_fs, full_vs, key_names, main_fragment, main_vertex, pmrem_fs, uniform_names, vsm_blur_fs, MAX_LIGHTS};
+use crate::renderers::plan::{material_uniforms, map_transform, plan_frame, program_key, shadow_plans, DrawItem, RenderPlan, VariantInputs, LIGHT_STRIDE};
+use crate::renderers::shaders::{background_fs, frame_block_names, frame_block_offsets, full_vs, key_names, main_fragment, main_vertex, pmrem_fs, uniform_names, vsm_blur_fs, FRAME_BINDING, MAX_LIGHTS};
 use crate::core::object3d::visible_descendants;
 use crate::maths::color::ColorSpace;
 use crate::maths::euler::{Euler, EulerOrder};
@@ -280,6 +280,8 @@ pub struct GpuRenderer {
     env_vals: Vec<f64>,
     /// the frame uniforms' version: programs that saw an older one get them again
     fver: i64,
+    /// the `fver` the Frame block was last packed at
+    block_ver: i64,
     /// shadow map type of the frame's programs (1 PCF, 2 basic, 3 VSM) and the pass being drawn (0: the screen)
     stype: i64,
     shadow_pass: i64,
@@ -317,6 +319,9 @@ pub struct GpuRenderer {
     light_counts: Vec<i64>,
     fog_kind: i64,
     frame_floats: Vec<f64>,
+    /// the `Frame` block last uploaded, and its buffer
+    frame_block: Vec<f64>,
+    ubo: i64,
     frame_ints: Vec<i64>,
 }
 
@@ -502,6 +507,7 @@ impl GpuRenderer {
             scene_env_rotation: Euler::new(0.0, 0.0, 0.0, EulerOrder::Xyz),
             env_vals: Vec::new(),
             fver: 0,
+            block_ver: -1,
             stype: 1,
             shadow_pass: 0,
             has_shadows: false,
@@ -529,6 +535,8 @@ impl GpuRenderer {
             light_counts: vec![0, 0, 0, 0, 0, 0],
             fog_kind: 0,
             frame_floats: Vec::new(),
+            frame_block: Vec::new(),
+            ubo: 0,
             frame_ints: Vec::new(),
         }
     }
@@ -603,8 +611,9 @@ impl GpuRenderer {
         } else {
             c.use_program(id);
         }
-        if seen != self.fver {
+        if seen != self.fver || self.block_ver != self.fver {
             self.frame_uniforms(c);
+            self.block_ver = self.fver;
         }
         self.programs.insert(key, ProgramEntry { id, frame: self.fver });
     }
@@ -1183,38 +1192,70 @@ impl GpuRenderer {
         }
     }
 
-    /// The frame's uniforms, recorded in `frame_floats` / `frame_ints` by `render`.
-    fn frame_uniforms(&self, c: &mut GpuCommands) {
-        let f = &self.frame_floats;
-        let mut v: Vec<f64> = Vec::new();
-        for i in 0..16 {
-            v.push(f[i]);
+    /// The frame's uniforms (recorded in `frame_floats` / `frame_ints` by
+    /// `render` and the passes) as the `Frame` uniform block, uploaded and
+    /// bound when they changed since the last upload.
+    fn frame_uniforms(&mut self, c: &mut GpuCommands) {
+        let names = frame_block_names();
+        let at = frame_block_offsets();
+        let size = at[names.len()] as usize;
+        let mut b: Vec<f64> = vec![0.0; size];
+        let f = self.frame_floats.clone();
+        for i in 0..48 {
+            b[i] = f[i];
         }
-        c.uniform(self.loc("u_view"), U_MAT4, &v);
-        v = Vec::new();
-        for i in 16..32 {
-            v.push(f[i]);
+        b[48] = f[48];
+        b[49] = f[49];
+        b[50] = f[50];
+        b[51] = f[60];
+        for i in 0..8 {
+            b[52 + i] = f[51 + i];
         }
-        c.uniform(self.loc("u_viewInv"), U_MAT4, &v);
-        v = Vec::new();
-        for i in 32..48 {
-            v.push(f[i]);
+        b[60] = f[59];
+        b[61] = self.frame_ints[0] as f64;
+        if self.trans_size.len() >= 2 {
+            b[62] = self.trans_size[0];
+            b[63] = self.trans_size[1];
         }
-        c.uniform(self.loc("u_proj"), U_MAT4, &v);
-        c.uniform(self.loc("u_cam"), U_VEC3, &vec![f[48], f[49], f[50]]);
-        c.uniform(self.loc("u_lights"), U_VEC4, &self.lights);
-        c.uniform_int(self.loc("u_nlights"), self.frame_ints[0]);
-        c.uniform(self.loc("u_fog"), U_VEC4, &vec![f[51], f[52], f[53], f[54], f[55], f[56], f[57], f[58]]);
-        c.uniform(self.loc("u_pointScale"), U_FLOAT, &vec![f[59]]);
-        c.uniform(self.loc("u_exposure"), U_FLOAT, &vec![f[60]]);
-        if !self.trans_size.is_empty() {
-            c.uniform(self.loc("u_transSize"), U_VEC2, &self.trans_size);
+        for i in 0..self.shadow_mat.len() {
+            if 64 + i < 128 {
+                b[64 + i] = self.shadow_mat[i];
+            }
         }
-        if !self.shadow_mat.is_empty() {
-            c.uniform(self.loc("u_shMat"), U_MAT4, &self.shadow_mat);
-            c.uniform(self.loc("u_shParam"), U_VEC4, &self.shadow_param);
-            c.uniform(self.loc("u_shSize"), U_VEC4, &self.shadow_size);
+        for i in 0..self.shadow_param.len() {
+            if 128 + i < 144 {
+                b[128 + i] = self.shadow_param[i];
+            }
         }
+        for i in 0..self.shadow_size.len() {
+            if 144 + i < 160 {
+                b[144 + i] = self.shadow_size[i];
+            }
+        }
+        for i in 0..self.lights.len() {
+            if 160 + i < size {
+                b[160 + i] = self.lights[i];
+            }
+        }
+        // element by element (a Vec comparison is a reference test in some Ranger targets)
+        let mut same = b.len() == self.frame_block.len();
+        if same {
+            for i in 0..size {
+                if b[i] != self.frame_block[i] {
+                    same = false;
+                    break;
+                }
+            }
+        }
+        if same {
+            return;
+        }
+        if self.ubo == 0 {
+            self.ubo = self.id();
+        }
+        c.uniform_buffer(self.ubo, &b);
+        c.ubind(FRAME_BINDING, self.ubo, 0, (size * 4) as i64);
+        self.frame_block = b;
     }
 
     /// The opaque scene (and background) drawn linear and untoned into a
@@ -1537,6 +1578,9 @@ impl GpuRenderer {
         let mut c = GpuCommands::new();
         let mut missing: Vec<String> = Vec::new();
         self.frame += 1;
+        // the Frame block is uploaded and bound once each frame at least (the
+        // context may be shared with another renderer that binds its own)
+        self.frame_block = Vec::new();
         let plan = plan_frame(scene, camera, &s.clear_color, s.clear_alpha);
         let mut override_mat: Option<MaterialRef> = None;
         let mut bg_tex: Option<TextureRef> = None;
@@ -2218,57 +2262,26 @@ impl GpuRenderer {
         let env_mode = if sp != 0 || shader { 0 } else { self.env_bind(c, &m) };
         let points_uv = if kind == 6 && !has_uv { 1 } else { 0 };
         let opaque = !m.transparent && m.blending == Blending::Normal;
-        let physical = if mu[22] > 0.5 { 1 } else { 0 };
-        let sheen_on = if physical == 1 && m.sheen > 0.0 { 1 } else { 0 };
-        let lit = mu[13] > 0.5;
-        // the program variant, in key_names order
-        let mut vals: Vec<i64> = vec![
-            if has_map { 1 } else { 0 },
-            points_uv,
-            if has_normal { 1 } else { 0 },
-            if opaque { 1 } else { 0 },
-            if m.tone_mapped { s.tone_mapping } else { 0 },
-            bits,
-            if s.output_linear { 1 } else { 0 },
-            if m.premultiplied_alpha { 1 } else { 0 },
-            if has_emap { 1 } else { 0 },
-            if dashed { 1 } else { 0 },
-            0,
-            if instances > 0 { 1 } else { 0 },
-            if has_disp { 1 } else { 0 },
-            if sprite { 1 } else { 0 },
-            mu[15] as i64,
-            if lit { 1 } else { 0 },
-            if mu[14] > 0.5 { 1 } else { 0 },
-            physical,
-            if mu[17] > 0.5 { 1 } else { 0 },
-            sheen_on,
-            0,
-            0,
-            if mu[19] > 0.5 { self.fog_kind } else { 0 },
-            0,
-            env_mode,
-            0,
-        ];
-        vals[21] = if self.light_counts[5] > 0 { 1 } else { 0 };
-        vals[20] = if physical == 1 && trans > 0.0 { 1 } else { 0 };
-        for k in 0..6 {
-            vals.push(if lit { self.light_counts[k] } else { 0 });
-        }
-        if sp != 0 {
-            // a shadow caster keeps only what decides its discards
-            let keep: Vec<i64> = vec![0, 1, 3, 9, 11, 12];
-            let mut v2: Vec<i64> = vec![0; vals.len()];
-            for k in keep.iter() {
-                v2[*k as usize] = vals[*k as usize];
-            }
-            v2[5] = bits & 1;
-            v2[23] = 1;
-            vals = v2;
-        } else {
-            vals[10] = if o.receive_shadow && self.has_shadows { 1 } else { 0 };
-            vals[25] = if vals[10] == 1 { self.sh_slots } else { 0 };
-        }
+        // the program variant (plan::program_key, shared with the WebGL2 backend)
+        let mut vi = VariantInputs::new();
+        vi.has_map = has_map;
+        vi.points_uv = points_uv == 1;
+        vi.has_normal = has_normal;
+        vi.maps = bits;
+        vi.has_emap = has_emap;
+        vi.instanced = instances > 0;
+        vi.has_disp = has_disp;
+        vi.sprite = sprite;
+        vi.receive = o.receive_shadow && self.has_shadows;
+        vi.transmission = trans > 0.0;
+        vi.env_mode = env_mode;
+        vi.shadow_pass = sp != 0;
+        vi.tone = s.tone_mapping;
+        vi.linear_out = s.output_linear;
+        vi.fog_kind = self.fog_kind;
+        vi.sh_slots = self.sh_slots;
+        vi.light_counts = self.light_counts.clone();
+        let vals = program_key(&m, &mu, &vi);
         if shader {
             if !self.use_shader(c, frame, &m, &o.matrix_world, instances > 0, colored, data) {
                 return;
@@ -2298,7 +2311,7 @@ impl GpuRenderer {
         }
         c.uniform_int(self.loc("u_hasDisp"), if has_disp { 1 } else { 0 });
         c.uniform(self.loc("u_bumpScale"), U_FLOAT, &vec![m.bump_scale]);
-        if sheen_on == 1 {
+        if vals[19] == 1 {
             let sr = if m.sheen_roughness < 0.0001 {
                 0.0001
             } else if m.sheen_roughness > 1.0 {

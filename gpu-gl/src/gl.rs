@@ -17,6 +17,8 @@ pub type GLintptr = isize;
 
 pub const ARRAY_BUFFER: GLenum = 0x8892;
 pub const ELEMENT_ARRAY_BUFFER: GLenum = 0x8893;
+pub const UNIFORM_BUFFER: GLenum = 0x8A11;
+pub const INVALID_INDEX: GLuint = 0xFFFF_FFFF;
 pub const STATIC_DRAW: GLenum = 0x88E4;
 pub const DYNAMIC_DRAW: GLenum = 0x88E8;
 pub const VERTEX_SHADER: GLenum = 0x8B31;
@@ -98,6 +100,9 @@ gl_api! {
     BindBuffer: fn(GLenum, GLuint);
     BufferData: fn(GLenum, GLsizeiptr, *const c_void, GLenum);
     BufferSubData: fn(GLenum, GLintptr, GLsizeiptr, *const c_void);
+    BindBufferRange: fn(GLenum, GLuint, GLuint, GLintptr, GLsizeiptr);
+    GetUniformBlockIndex: fn(GLuint, *const u8) -> GLuint;
+    UniformBlockBinding: fn(GLuint, GLuint, GLuint);
     CreateShader: fn(GLenum) -> GLuint;
     DeleteShader: fn(GLuint);
     ShaderSource: fn(GLuint, GLsizei, *const *const u8, *const GLint);

@@ -37,6 +37,8 @@ pub struct Player {
 }
 
 const SIZES: [usize; 7] = [0, 1, 2, 3, 4, 9, 16];
+/// The uniform blocks a program binds by name after linking, at their index (three/src/renderers/gpu.rs block_names).
+const BLOCKS: [&str; 1] = ["Frame"];
 
 fn at(ints: &[i64], i: usize) -> Result<i64, String> {
     ints.get(i).copied().ok_or_else(|| format!("gpu-gl: stream ends inside a command at {}", i))
@@ -87,7 +89,13 @@ impl Player {
                         // BUFFER id, kind, dynamic, n
                         let (id, index, dynamic, cnt) = (at(ints, i)?, at(ints, i + 1)? == 1, at(ints, i + 2)? == 1, at(ints, i + 3)? as usize);
                         i += 4;
-                        let target = if index { ELEMENT_ARRAY_BUFFER } else { ARRAY_BUFFER };
+                        let target = if index {
+                            ELEMENT_ARRAY_BUFFER
+                        } else if at(ints, i - 3)? == 2 {
+                            UNIFORM_BUFFER
+                        } else {
+                            ARRAY_BUFFER
+                        };
                         let idx: Vec<u32>;
                         let (ptr, size) = if index {
                             idx = ints.get(i..i + cnt).ok_or("gpu-gl: index data cut")?.iter().map(|&v| v as u32).collect();
@@ -132,6 +140,15 @@ impl Player {
                         (gl.GetProgramiv)(p, LINK_STATUS, &mut ok);
                         if ok == 0 {
                             return Err(format!("gpu-gl program: {}", program_log(gl, p)));
+                        }
+                        // each uniform block the program declares at its binding (three's gpu.rs block_names)
+                        for (bk, bname) in BLOCKS.iter().enumerate() {
+                            let mut name = bname.as_bytes().to_vec();
+                            name.push(0);
+                            let bi = (gl.GetUniformBlockIndex)(p, name.as_ptr());
+                            if bi != INVALID_INDEX {
+                                (gl.UniformBlockBinding)(p, bi, bk as GLuint);
+                            }
                         }
                         let mut locs = Vec::with_capacity(nn);
                         for q in 0..nn {
@@ -412,6 +429,16 @@ impl Player {
                         if status != FRAMEBUFFER_COMPLETE {
                             return Err(format!("gpu-gl: target {} is incomplete (0x{:x})", a[0], status));
                         }
+                    }
+                    15 => {
+                        // UBIND binding, buffer, byte offset, byte size
+                        let a = ints.get(i..i + 4).ok_or("gpu-gl: ubind command cut")?;
+                        i += 4;
+                        let buf = match self.objs.get(&a[1]) {
+                            Some(Obj::Buffer { buf, .. }) => *buf,
+                            _ => return Err(format!("gpu-gl: id {} is not a buffer", a[1])),
+                        };
+                        (gl.BindBufferRange)(UNIFORM_BUFFER, a[0] as GLuint, buf, a[2] as isize, a[3] as isize);
                     }
                     14 => {
                         // MIPMAPS texture

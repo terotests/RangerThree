@@ -9,11 +9,12 @@
 use ranger::prelude::*;
 
 use crate::core::object3d::{descendants, update_matrix_world, Background, ObjectKind, ObjectRef};
-use crate::materials::material::{Material, MaterialKind, Side};
+use crate::materials::material::{Blending, Material, MaterialKind, Side};
 use crate::maths::color::Color;
 use crate::maths::matrix4::Matrix4;
 use crate::maths::math_utils::RAD2DEG;
 use crate::maths::vector3::Vector3;
+use crate::renderers::shaders::key_names;
 use crate::renderers::soft::{collect_lights, surface_of};
 use crate::scenes::fog::FogKind;
 use crate::textures::texture::UV_MAPPING;
@@ -497,4 +498,124 @@ pub fn map_transform(m: &Material) -> Vec<f64> {
         }
     }
     out
+}
+
+/// What decides a draw's program variant besides its material: the
+/// resources bound for it, the object, and the frame. Both GPU backends fill
+/// one and take the key from `program_key`, so they always agree.
+#[derive(Clone)]
+pub struct VariantInputs {
+    pub has_map: bool,
+    /// points sample the map across each point (no uv attribute)
+    pub points_uv: bool,
+    pub has_normal: bool,
+    /// u_maps: bit per extra map bound (1 alpha, 2 roughness, 4 metalness, 8 normal, 16 ao, 32 matcap, 64 gradient, 128 bump)
+    pub maps: i64,
+    pub has_emap: bool,
+    pub instanced: bool,
+    pub has_disp: bool,
+    pub sprite: bool,
+    /// the object receives shadows and the frame has shadow maps
+    pub receive: bool,
+    /// the frame has a transmission texture and the material is transmissive
+    pub transmission: bool,
+    /// 0 none, 1 prefiltered (CubeUV), 2 equirect
+    pub env_mode: i64,
+    /// the material's alphaToCoverage (a JavaScript-side property)
+    pub alpha_to_coverage: bool,
+    pub shadow_pass: bool,
+    /// the frame: tone mapping operator, linear output, fog kind (0 none, 1 linear, 2 exp2),
+    /// bit per shadow slot it fills, light counts per kind
+    pub tone: i64,
+    pub linear_out: bool,
+    pub fog_kind: i64,
+    pub sh_slots: i64,
+    pub light_counts: Vec<i64>,
+}
+
+impl VariantInputs {
+    pub fn new() -> VariantInputs {
+        VariantInputs {
+            has_map: false,
+            points_uv: false,
+            has_normal: false,
+            maps: 0,
+            has_emap: false,
+            instanced: false,
+            has_disp: false,
+            sprite: false,
+            receive: false,
+            transmission: false,
+            env_mode: 0,
+            alpha_to_coverage: false,
+            shadow_pass: false,
+            tone: 0,
+            linear_out: false,
+            fog_kind: 0,
+            sh_slots: 0,
+            light_counts: vec![0, 0, 0, 0, 0, 0],
+        }
+    }
+}
+
+fn flag(b: bool) -> i64 {
+    if b {
+        1
+    } else {
+        0
+    }
+}
+
+/// The program variant of a draw, in `shaders::key_names` order (`mu`: the
+/// material's `material_uniforms`). A shadow caster keeps only what decides
+/// its discards.
+pub fn program_key(m: &Material, mu: &Vec<f64>, v: &VariantInputs) -> Vec<i64> {
+    let dashed = m.kind == MaterialKind::LineDashed;
+    let opaque = !m.transparent && m.blending == Blending::Normal && !v.alpha_to_coverage;
+    if v.shadow_pass {
+        let mut k: Vec<i64> = vec![0; key_names().len()];
+        k[0] = flag(v.has_map);
+        k[1] = flag(v.points_uv);
+        k[3] = flag(opaque);
+        k[5] = v.maps & 1;
+        k[9] = flag(dashed);
+        k[11] = flag(v.instanced);
+        k[12] = flag(v.has_disp);
+        k[23] = 1;
+        return k;
+    }
+    let physical = mu[22] > 0.5;
+    let lit = mu[13] > 0.5;
+    let mut k: Vec<i64> = vec![
+        flag(v.has_map),
+        flag(v.points_uv),
+        flag(v.has_normal),
+        flag(opaque),
+        if m.tone_mapped { v.tone } else { 0 },
+        v.maps,
+        flag(v.linear_out),
+        flag(m.premultiplied_alpha),
+        flag(v.has_emap),
+        flag(dashed),
+        flag(v.receive),
+        flag(v.instanced),
+        flag(v.has_disp),
+        flag(v.sprite),
+        mu[15] as i64,
+        flag(lit),
+        flag(mu[14] > 0.5),
+        flag(physical),
+        flag(mu[17] > 0.5),
+        flag(physical && m.sheen > 0.0),
+        flag(physical && v.transmission),
+        flag(v.light_counts[5] > 0),
+        if mu[19] > 0.5 { v.fog_kind } else { 0 },
+        0,
+        v.env_mode,
+        if v.receive { v.sh_slots } else { 0 },
+    ];
+    for i in 0..6 {
+        k.push(if lit { v.light_counts[i] } else { 0 });
+    }
+    k
 }

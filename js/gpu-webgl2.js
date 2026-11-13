@@ -12,6 +12,8 @@
 (function (root) {
   "use strict";
   var SIZES = { 1: 1, 2: 2, 3: 3, 4: 4, 5: 9, 6: 16 };
+  // the uniform blocks a program binds by name after linking, at their index (renderers/gpu.rs block_names)
+  var BLOCKS = ["Frame"];
 
   function GpuWebGL2(gl) {
     this.gl = gl;
@@ -40,8 +42,8 @@
       switch (op) {
         case 1: { // BUFFER id, kind, dynamic, n
           var id = ints[i], index = ints[i + 1] === 1, dyn = ints[i + 2] === 1, cnt = ints[i + 3];
+          var target = index ? gl.ELEMENT_ARRAY_BUFFER : ints[i + 1] === 2 ? gl.UNIFORM_BUFFER : gl.ARRAY_BUFFER, data;
           i += 4;
-          var target = index ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER, data;
           if (index) { data = new Uint32Array(cnt); for (var k = 0; k < cnt; k++) data[k] = ints[i + k]; i += cnt; }
           else { data = floats.subarray(f, f + cnt); f += cnt; }
           var e = obj[id];
@@ -60,6 +62,11 @@
           gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fs));
           gl.linkProgram(p);
           if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error("gpu-webgl2 program: " + gl.getProgramInfoLog(p));
+          // each uniform block the program declares at its binding (gpu.rs block_names)
+          for (var bk = 0; bk < BLOCKS.length; bk++) {
+            var bi = gl.getUniformBlockIndex(p, BLOCKS[bk]);
+            if (bi !== gl.INVALID_INDEX && bi !== 4294967295) gl.uniformBlockBinding(p, bi, bk);
+          }
           var locs = [];
           for (var q = 0; q < nn; q++) locs.push(gl.getUniformLocation(p, texts[ints[i + q]]));
           i += nn;
@@ -221,6 +228,11 @@
           if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("gpu-webgl2: target " + gid + " is incomplete");
           gl.bindFramebuffer(gl.FRAMEBUFFER, null);
           obj[gid] = tg;
+          break;
+        }
+        case 15: { // UBIND binding, buffer, byte offset, byte size
+          gl.bindBufferRange(gl.UNIFORM_BUFFER, ints[i], obj[ints[i + 1]].buf, ints[i + 2], ints[i + 3]);
+          i += 4;
           break;
         }
         case 14: { // MIPMAPS texture
