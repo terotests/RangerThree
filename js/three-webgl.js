@@ -46,6 +46,114 @@
 
   var NAMES = S.uniform_names();
 
+  // GL state and uniform values, cached: a call that sets what is already
+  // set is skipped. The setters are shadowed on the context object itself, so
+  // every path of the backend goes through the cache and it never goes stale;
+  // code that touches the context directly calls renderer.resetState() after.
+  // Uniform values are kept per location (each location belongs to one
+  // program), vertex attribute arrays per vertex array object, as in GL.
+  function cacheState(gl) {
+    var raw = {}, st;
+    function reset() {
+      st = { caps: {}, unit: -1, tex: {}, buf: {}, prog: undefined, vao: undefined, vaos: new Map(), gen: [], misc: {}, uni: new WeakMap() };
+    }
+    reset();
+    function wrap(name, fn) { raw[name] = gl[name]; gl[name] = fn; }
+    function same(a, b) {
+      if (a === undefined || a.length !== b.length) return false;
+      for (var i = 0; i < b.length; i++) if (a[i] !== b[i]) return false;
+      return true;
+    }
+    function vaoState() {
+      var v = st.vaos.get(st.vao);
+      if (!v) { v = { on: [], ptr: [], div: [], elem: undefined }; st.vaos.set(st.vao, v); }
+      return v;
+    }
+    wrap("enable", function (c) { if (st.caps[c] !== true) { st.caps[c] = true; raw.enable.call(gl, c); } });
+    wrap("disable", function (c) { if (st.caps[c] !== false) { st.caps[c] = false; raw.disable.call(gl, c); } });
+    // calls with plain arguments whose last values are kept under one key
+    function keyed(name, key) {
+      wrap(name, function () {
+        var a = Array.prototype.slice.call(arguments);
+        if (same(st.misc[key], a)) return;
+        st.misc[key] = a;
+        if (key === "blendEq" || key === "blendFn") st.misc[key === "blendEq" ? "blendEquationSeparate" : "blendFuncSeparate"] = undefined;
+        raw[name].apply(gl, a);
+      });
+    }
+    keyed("depthMask", "depthMask"); keyed("depthFunc", "depthFunc"); keyed("frontFace", "frontFace"); keyed("cullFace", "cullFace");
+    keyed("colorMask", "colorMask"); keyed("blendColor", "blendColor"); keyed("polygonOffset", "polygonOffset");
+    // the one-value and separate forms of the blend calls set the same state
+    wrap("blendEquation", function (m) { gl.blendEquationSeparate(m, m); });
+    wrap("blendFunc", function (a, b) { gl.blendFuncSeparate(a, b, a, b); });
+    keyed("blendEquationSeparate", "blendEquationSeparate"); keyed("blendFuncSeparate", "blendFuncSeparate");
+    wrap("activeTexture", function (u) { if (st.unit !== u) { st.unit = u; raw.activeTexture.call(gl, u); } });
+    wrap("bindTexture", function (t, x) {
+      var k = st.unit + ":" + t;
+      if (st.tex[k] === x && x !== undefined) return;
+      st.tex[k] = x; raw.bindTexture.call(gl, t, x);
+    });
+    wrap("deleteTexture", function (x) { for (var k in st.tex) if (st.tex[k] === x) st.tex[k] = undefined; raw.deleteTexture.call(gl, x); });
+    wrap("bindBuffer", function (t, x) {
+      // the element array binding is vertex array state
+      if (t === 34963) { var v = vaoState(); if (v.elem === x) return; v.elem = x; }
+      else { if (st.buf[t] === x && x !== undefined) return; st.buf[t] = x; }
+      raw.bindBuffer.call(gl, t, x);
+    });
+    wrap("deleteBuffer", function (x) {
+      for (var k in st.buf) if (st.buf[k] === x) st.buf[k] = undefined;
+      st.vaos.forEach(function (v) { if (v.elem === x) v.elem = undefined; for (var i = 0; i < v.ptr.length; i++) if (v.ptr[i] && v.ptr[i][0] === x) v.ptr[i] = undefined; });
+      raw.deleteBuffer.call(gl, x);
+    });
+    wrap("bindVertexArray", function (x) { if (st.vao === x) return; st.vao = x; raw.bindVertexArray.call(gl, x); });
+    wrap("deleteVertexArray", function (x) { st.vaos.delete(x); if (st.vao === x) st.vao = undefined; raw.deleteVertexArray.call(gl, x); });
+    wrap("enableVertexAttribArray", function (i) { var v = vaoState(); if (v.on[i] !== true) { v.on[i] = true; raw.enableVertexAttribArray.call(gl, i); } });
+    wrap("disableVertexAttribArray", function (i) { var v = vaoState(); if (v.on[i] !== false) { v.on[i] = false; raw.disableVertexAttribArray.call(gl, i); } });
+    wrap("vertexAttribPointer", function (i, size, type, norm, stride, off) {
+      var v = vaoState(), a = [st.buf[34962], size, type, norm, stride, off];
+      if (a[0] !== undefined && same(v.ptr[i], a)) return;
+      v.ptr[i] = a; raw.vertexAttribPointer.call(gl, i, size, type, norm, stride, off);
+    });
+    wrap("vertexAttribIPointer", function (i, size, type, stride, off) { vaoState().ptr[i] = undefined; raw.vertexAttribIPointer.call(gl, i, size, type, stride, off); });
+    wrap("vertexAttribDivisor", function (i, d) { var v = vaoState(); if (v.div[i] !== d) { v.div[i] = d; raw.vertexAttribDivisor.call(gl, i, d); } });
+    // generic (constant) attribute values are context state
+    wrap("vertexAttrib4f", function (i, x, y, z, w) {
+      var a = [x, y, z, w];
+      if (same(st.gen[i], a)) return;
+      st.gen[i] = a; raw.vertexAttrib4f.call(gl, i, x, y, z, w);
+    });
+    wrap("vertexAttrib4fv", function (i, a) { st.gen[i] = undefined; raw.vertexAttrib4fv.call(gl, i, a); });
+    wrap("useProgram", function (p) { if (st.prog === p && p !== undefined) return; st.prog = p; raw.useProgram.call(gl, p); });
+    wrap("deleteProgram", function (p) { if (st.prog === p) st.prog = undefined; raw.deleteProgram.call(gl, p); });
+    // uniforms: scalars and vectors by value, arrays and matrices compared element by element
+    ["uniform1f", "uniform2f", "uniform3f", "uniform4f", "uniform1i", "uniform2i", "uniform3i", "uniform4i"].forEach(function (name) {
+      wrap(name, function (loc) {
+        if (loc == null) return;
+        var a = Array.prototype.slice.call(arguments, 1);
+        if (same(st.uni.get(loc), a)) return;
+        st.uni.set(loc, a); raw[name].apply(gl, arguments);
+      });
+    });
+    ["uniform1fv", "uniform2fv", "uniform3fv", "uniform4fv", "uniform1iv", "uniform2iv", "uniform3iv", "uniform4iv"].forEach(function (name) {
+      wrap(name, function (loc, v) {
+        if (loc == null) return;
+        if (arguments.length > 2) { st.uni.delete(loc); raw[name].apply(gl, arguments); return; }
+        if (same(st.uni.get(loc), v)) return;
+        st.uni.set(loc, Array.prototype.slice.call(v)); raw[name].call(gl, loc, v);
+      });
+    });
+    ["uniformMatrix3fv", "uniformMatrix4fv"].forEach(function (name) {
+      wrap(name, function (loc, tr, v) {
+        if (loc == null) return;
+        if (arguments.length > 3) { st.uni.delete(loc); raw[name].apply(gl, arguments); return; }
+        var c = st.uni.get(loc);
+        if (c && c.tr === tr && same(c.v, v)) return;
+        st.uni.set(loc, { tr: tr, v: Array.prototype.slice.call(v) }); raw[name].call(gl, loc, tr, v);
+      });
+    });
+    return reset;
+  }
+
   // the inverse transpose of a 4x4 matrix's upper 3x3 (column-major), into out
   function normalMatrix(e, out) {
     var a = e[0], b = e[1], c = e[2], d = e[4], f = e[5], g = e[6], h = e[8], i = e[9], j = e[10];
@@ -60,6 +168,7 @@
   function Backend(gl, renderer) {
     this.gl = gl;
     this.renderer = renderer;
+    this.resetState = cacheState(gl);
     this.mains = {};
     gl.getExtension("KHR_parallel_shader_compile");
     this.seenDraws = new WeakMap(); // object -> material key it was last drawn with (prepass)
@@ -230,12 +339,18 @@
       e.version = tex.version; e.srgb = srgb;
     }
     gl.bindTexture(gl.TEXTURE_2D, e.tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, WRAPS[tex.wrap_s] || gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, WRAPS[tex.wrap_t] || gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, tex.mag_filter === 1003 ? gl.NEAREST : gl.LINEAR);
+    // sampling parameters are texture object state: set when they change
+    var ws = WRAPS[tex.wrap_s] || gl.CLAMP_TO_EDGE, wt = WRAPS[tex.wrap_t] || gl.CLAMP_TO_EDGE, mag = tex.mag_filter === 1003 ? gl.NEAREST : gl.LINEAR;
     var min = FILTERS[tex.min_filter] || gl.LINEAR;
     if (!e.mip) min = (min === 9728 || min === 9984 || min === 9986) ? gl.NEAREST : gl.LINEAR;
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, min);
+    var params = ws + "," + wt + "," + mag + "," + min;
+    if (e.params !== params) {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, ws);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wt);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, mag);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, min);
+      e.params = params;
+    }
     return e.tex;
   };
 
@@ -536,9 +651,8 @@
     if (!this.shDummy) this.shDummy = { flat: depthTexture(gl, false, 1, 1, 1, 1), cube: depthTexture(gl, true, 1, 1, 1, 1) };
     for (var i = 0; i < 4; i++) {
       gl.activeTexture(gl.TEXTURE0 + SHADOW_UNITS[i]);
-      gl.bindTexture(gl.TEXTURE_2D, null);
-      gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
-      if (type !== 3) gl.bindTexture(i === 3 ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_2D, i === 3 ? this.shDummy.cube : this.shDummy.flat);
+      gl.bindTexture(gl.TEXTURE_2D, type !== 3 && i !== 3 ? this.shDummy.flat : null);
+      gl.bindTexture(gl.TEXTURE_CUBE_MAP, type !== 3 && i === 3 ? this.shDummy.cube : null);
     }
     gl.activeTexture(gl.TEXTURE0);
   };
