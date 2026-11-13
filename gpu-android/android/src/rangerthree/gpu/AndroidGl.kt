@@ -34,6 +34,9 @@ class AndroidGl : Gl {
     override fun deleteProgram(p: Int) = GLES30.glDeleteProgram(p)
     override fun useProgram(p: Int) = GLES30.glUseProgram(p)
     override fun getUniformLocation(p: Int, name: String): Int = GLES30.glGetUniformLocation(p, name)
+    override fun getUniformBlockIndex(p: Int, name: String): Int = GLES30.glGetUniformBlockIndex(p, name)
+    override fun uniformBlockBinding(p: Int, index: Int, binding: Int) = GLES30.glUniformBlockBinding(p, index, binding)
+    override fun bindBufferRange(target: Int, index: Int, b: Int, offset: Int, bytes: Int) = GLES30.glBindBufferRange(target, index, b, offset, bytes)
 
     override fun uniform1i(loc: Int, v: Int) = GLES30.glUniform1i(loc, v)
     override fun uniform1fv(loc: Int, count: Int, v: FloatArray, offset: Int) = GLES30.glUniform1fv(loc, count, v, offset)

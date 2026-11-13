@@ -17,6 +17,8 @@ import java.nio.IntBuffer
  * One player per GpuRenderer: the ids belong to the renderer that wrote them.
  */
 class GpuPlayer(val gl: Gl) {
+    // the uniform blocks a program binds by name after linking, at their index (renderers/gpu.rs block_names)
+    private val BLOCKS = arrayOf("Frame")
     private sealed class Obj {
         class Buffer(val name: Int, var length: Int) : Obj()
         class Program(val name: Int, val locs: IntArray) : Obj()
@@ -94,8 +96,8 @@ class GpuPlayer(val gl: Gl) {
                     val index = I(1) == 1
                     val dyn = I(2) == 1
                     val cnt = I(3)
+                    val target = if (index) GL.ELEMENT_ARRAY_BUFFER else if (I(1) == 2) GL.UNIFORM_BUFFER else GL.ARRAY_BUFFER
                     i += 4
-                    val target = if (index) GL.ELEMENT_ARRAY_BUFFER else GL.ARRAY_BUFFER
                     val data: java.nio.Buffer
                     if (index) {
                         data = intsAt(ints, i, cnt)
@@ -129,6 +131,11 @@ class GpuPlayer(val gl: Gl) {
                     gl.deleteShader(v)
                     gl.deleteShader(fr)
                     if (!gl.programLinked(p)) throw IllegalStateException("gpu-android program: " + gl.programInfoLog(p))
+                    // each uniform block the program declares at its binding (gpu.rs block_names)
+                    for (k in BLOCKS.indices) {
+                        val bi = gl.getUniformBlockIndex(p, BLOCKS[k])
+                        if (bi != GL.INVALID_INDEX) gl.uniformBlockBinding(p, bi, k)
+                    }
                     val locs = IntArray(nn) { q -> gl.getUniformLocation(p, texts[I(q)]) }
                     i += nn
                     objs[id]?.let { delete(it) }
@@ -277,6 +284,10 @@ class GpuPlayer(val gl: Gl) {
                     gl.bindTexture(if (I(2) != 0) GL.TEXTURE_CUBE_MAP else GL.TEXTURE_2D, if (ints[i + 1] != 0L) texture(ints[i + 1]) else 0)
                     gl.activeTexture(GL.TEXTURE0)
                     i += 3
+                }
+                15 -> { // UBIND binding, buffer, byte offset, byte size
+                    gl.bindBufferRange(GL.UNIFORM_BUFFER, I(0), buffer(ints[i + 1]).name, I(2), I(3))
+                    i += 4
                 }
                 11 -> { // RELEASE id
                     val id = ints[i++]
