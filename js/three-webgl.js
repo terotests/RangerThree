@@ -33,11 +33,14 @@
   var FILTERS = { 1003: 9728, 1004: 9984, 1005: 9986, 1006: 9729, 1007: 9985, 1008: 9987 };
   var WRAPS = { 1000: 10497, 1001: 33071, 1002: 33648 };
 
+  // no status query here: a query waits for the driver, so the compile and
+  // link of every program a frame needs are issued first (startProgram) and
+  // checked when the program is first used (finishProgram); with
+  // KHR_parallel_shader_compile the driver compiles them side by side
   function compile(gl, type, src) {
     var s = gl.createShader(type);
     gl.shaderSource(s, src);
     gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error("WebGL2 shader: " + gl.getShaderInfoLog(s));
     return s;
   }
 
@@ -58,6 +61,8 @@
     this.gl = gl;
     this.renderer = renderer;
     this.mains = {};
+    gl.getExtension("KHR_parallel_shader_compile");
+    this.seenDraws = new WeakMap(); // object -> material key it was last drawn with (prepass)
     this.frame = {};
     this.fver = 0;
     this.cur = null;
@@ -108,9 +113,14 @@
     if (!vals) { vals = []; for (var i = 0; i < SPEC_KEYS.length; i++) vals.push(0); }
     var key = type + ":" + vals.join(","), m = this.mains[key], gl = this.gl;
     if (!m) {
-      m = this.mains[key] = program(gl, S.main_vertex(vals), S.main_fragment(type, vals), NAMES);
+      m = this.mains[key] = startProgram(gl, S.main_vertex(vals), S.main_fragment(type, vals), NAMES);
       m.seen = 0;
       this.programCount = (this.programCount || 0) + 1;
+    }
+    // the prepass only starts the compiles
+    if (this.prepass) return false;
+    if (!m.u) {
+      finishProgram(gl, m);
       gl.useProgram(m.prog);
       this.setUnits(m.u);
       this.cur = null;
@@ -126,6 +136,7 @@
       }
       m.seen = this.fver;
     }
+    return true;
   };
 
   // a uniform every variant shares for the whole frame (or pass): recorded,
@@ -234,16 +245,28 @@
   // backgrounds and, later, environment lighting match it). A level is a
   // 3 x 2 atlas of cube faces, each `size` texels with a one-texel border.
 
-  function program(gl, vs, fs, names) {
-    var prog = gl.createProgram();
-    gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, vs));
-    gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, fs));
+  function startProgram(gl, vs, fs, names) {
+    var prog = gl.createProgram(), v = compile(gl, gl.VERTEX_SHADER, vs), f = compile(gl, gl.FRAGMENT_SHADER, fs);
+    gl.attachShader(prog, v);
+    gl.attachShader(prog, f);
     gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error("WebGL2 program: " + gl.getProgramInfoLog(prog));
-    var u = {};
-    for (var i = 0; i < names.length; i++) u[names[i]] = gl.getUniformLocation(prog, names[i]);
-    return { prog: prog, u: u };
+    return { prog: prog, u: null, names: names, vs: v, fs: f };
   }
+  function finishProgram(gl, p) {
+    if (p.u) return p;
+    if (!gl.getProgramParameter(p.prog, gl.LINK_STATUS)) {
+      var log = gl.getProgramInfoLog(p.prog);
+      if (!gl.getShaderParameter(p.vs, gl.COMPILE_STATUS)) log = gl.getShaderInfoLog(p.vs);
+      else if (!gl.getShaderParameter(p.fs, gl.COMPILE_STATUS)) log = gl.getShaderInfoLog(p.fs);
+      throw new Error("WebGL2 program: " + log);
+    }
+    gl.deleteShader(p.vs); gl.deleteShader(p.fs); p.vs = p.fs = null;
+    var u = {};
+    for (var i = 0; i < p.names.length; i++) u[p.names[i]] = gl.getUniformLocation(p.prog, p.names[i]);
+    p.u = u;
+    return p;
+  }
+  function program(gl, vs, fs, names) { return finishProgram(gl, startProgram(gl, vs, fs, names)); }
 
   // the roughness -> level mapping of the prefiltered environment (three.js's roughnessToMip)
   function roughnessToMip(r) {
@@ -730,6 +753,22 @@
     this.transTex = null;
     if (transmissive.length && !override) this.transmissionPass(scene, plan, opaque, transmissive, w, h);
     var lists = [opaque, transmissive, transparent];
+    // a frame that may need programs not compiled yet starts all their
+    // compiles before the first draw waits for one (see startProgram)
+    var sig = [this.stype, this.tone, this.outLinear, this.hasRect, this.shSlots, this.fogKind, this.lightCounts.join("")].join(",");
+    var fresh = sig !== this.lastSig;
+    this.lastSig = sig;
+    for (var pl = 0; pl < 3; pl++) for (var pk = 0; pk < lists[pl].length; pk++) {
+      var po = lists[pl][pk].object, pm = override || po.material;
+      var mk = Array.isArray(pm) ? pm.map(function (x) { return x ? x.id + "." + x.version : ""; }).join(",") : pm ? pm.id + "." + pm.version : "";
+      if (this.seenDraws.get(po) !== mk) { this.seenDraws.set(po, mk); fresh = true; }
+    }
+    if (fresh) {
+      this.prepass = true;
+      for (var pl2 = 0; pl2 < 3; pl2++) for (var pk2 = 0; pk2 < lists[pl2].length; pk2++) this.draw(lists[pl2][pk2], info, override);
+      this.prepass = false;
+      this.cur = null;
+    }
     for (var li = 0; li < 3; li++) for (var k2 = 0; k2 < lists[li].length; k2++) this.draw(lists[li][k2], info, override);
     gl.disable(gl.POLYGON_OFFSET_FILL);
     gl.colorMask(true, true, true, true);
@@ -897,11 +936,12 @@
     var receive = o.receiveShadow && this.hasShadows ? 1 : 0;
     // the program variant, in SPEC_KEYS order; a shadow caster keeps only what decides its discards
     var sp = this.shadowPass ? 1 : 0;
-    this.useMain(this.stype, sp ? [glTex ? 1 : 0, pointsUv, 0, opaque ? 1 : 0, 0, bits & 1, 0, 0, 0, dashed ? 1 : 0, 0, instances > 0 ? 1 : 0, glD ? 1 : 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0] : [
+    var ok = this.useMain(this.stype, sp ? [glTex ? 1 : 0, pointsUv, 0, opaque ? 1 : 0, 0, bits & 1, 0, 0, 0, dashed ? 1 : 0, 0, instances > 0 ? 1 : 0, glD ? 1 : 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0] : [
       glTex ? 1 : 0, pointsUv, hasNormal ? 1 : 0, opaque ? 1 : 0, material.toneMapped === false ? 0 : this.tone, bits, this.outLinear,
       material.premultipliedAlpha ? 1 : 0, glE ? 1 : 0, dashed ? 1 : 0, receive, instances > 0 ? 1 : 0, glD ? 1 : 0, sprite ? 1 : 0,
       mu[15] | 0, mu[13] > 0.5 ? 1 : 0, mu[14] > 0.5 ? 1 : 0, physical, mu[17] > 0.5 ? 1 : 0,
       physical && sheen > 0 && shc ? 1 : 0, physical && tr > 0 ? 1 : 0, this.hasRect, mu[19] > 0.5 ? this.fogKind : 0, 0, env ? env.mode : 0, receive ? this.shSlots : 0].concat(mu[13] > 0.5 ? this.lightCounts : [0, 0, 0, 0, 0, 0]));
+    if (!ok) return;
     var u = this.u;
     gl.uniform4fv(u.u_mat, mu);
     this.envUniforms(env);
