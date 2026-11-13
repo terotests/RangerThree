@@ -23,6 +23,11 @@ facade.
   `android/AndroidGl.kt` for android.opengl.GLES30 and a JVM host
   (`jvm/`, JNA over Mesa EGL) for headless tests. Android runs the crate as
   Ranger's Kotlin output plus that player.
+- Shaders: `renderers/shaders.rs` writes each GLSL ES 3.00 program variant,
+  `renderers/glsl_pre.rs` resolves its `#if`s and macros in the crate, and
+  `renderers/wgsl.rs` translates it to WGSL for WebGPU, with the binding
+  layout a player needs (`node tests/wgsl-compile.mjs`,
+  `node tests/wgsl-draw.mjs` check it in Chromium's WebGPU).
 - `playground/` is the browser playground that GitHub Pages publishes on
   every push to `main` (`.github/workflows/playground.yml`).
 - `parity/` is the value meter (`node parity/value.mjs`), and `tests/` holds

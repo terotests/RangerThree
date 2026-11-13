@@ -5,6 +5,7 @@
 //! features one draw uses as constants (`SPEC` uniforms and `K_` flags), so it
 //! holds only the branches that draw takes, and one light loop per light kind.
 
+use crate::renderers::glsl_pre::preprocess;
 use ranger::prelude::*;
 
 /// Most lights one frame shades (`u_lights` holds seven vec4s for each).
@@ -233,7 +234,7 @@ pub fn main_fragment(shadow_type: i64, vals: &Vec<i64>) -> String {
         first += count;
     }
     head.push_str(&body.replace("//@LIGHTS\n", &loops).replace("//@FRAME\n", &frame_block_glsl()));
-    head
+    preprocess(&head)
 }
 
 /// The per-frame (per-pass) uniform block both main shaders declare, std140,
@@ -289,7 +290,7 @@ pub fn main_vertex(vals: &Vec<i64>) -> String {
     }
     let body = strip_spec_uniforms(&main_vertex_template(), &spec);
     head.push_str(&body.replace("#version 300 es\n", "").replace("//@FRAME\n", &frame_block_glsl()));
-    head
+    preprocess(&head)
 }
 
 /// Colour-space helpers and three.js's tone mapping operators (tonemapping_pars_fragment).
