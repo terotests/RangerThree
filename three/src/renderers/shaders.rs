@@ -5,6 +5,7 @@
 //! features one draw uses as constants (`SPEC` uniforms and `K_` flags), so it
 //! holds only the branches that draw takes, and one light loop per light kind.
 
+use crate::renderers::glsl_pre::preprocess;
 use ranger::prelude::*;
 
 /// Most lights one frame shades (`u_lights` holds seven vec4s for each).
@@ -161,24 +162,18 @@ fn is_spec_uniform(line: &str, spec: &Vec<String>) -> bool {
 
 /// `src` without the `uniform int` lines of the uniforms in `spec` (they are #defines in a variant).
 fn strip_spec_uniforms(src: &str, spec: &Vec<String>) -> String {
+    // line by line (slicing the whole source by byte offsets re-encodes it per slice in JavaScript)
     let mut out = String::new();
-    let mut start: usize = 0;
-    let bytes = src.as_bytes();
-    let n = bytes.len();
-    let mut i: usize = 0;
-    while i < n {
-        if bytes[i] == 10 {
-            let line = src[start..i].to_string();
-            if !is_spec_uniform(&line, spec) {
-                out.push_str(&line);
-                out.push_str("\n");
-            }
-            start = i + 1;
+    let mut first = true;
+    for line in src.split("\n") {
+        if is_spec_uniform(line, spec) {
+            continue;
         }
-        i += 1;
-    }
-    if start < n {
-        out.push_str(&src[start..n]);
+        if !first {
+            out.push_str("\n");
+        }
+        out.push_str(line);
+        first = false;
     }
     out
 }
@@ -233,7 +228,7 @@ pub fn main_fragment(shadow_type: i64, vals: &Vec<i64>) -> String {
         first += count;
     }
     head.push_str(&body.replace("//@LIGHTS\n", &loops).replace("//@FRAME\n", &frame_block_glsl()));
-    head
+    preprocess(&head)
 }
 
 /// The per-frame (per-pass) uniform block both main shaders declare, std140,
@@ -289,7 +284,7 @@ pub fn main_vertex(vals: &Vec<i64>) -> String {
     }
     let body = strip_spec_uniforms(&main_vertex_template(), &spec);
     head.push_str(&body.replace("#version 300 es\n", "").replace("//@FRAME\n", &frame_block_glsl()));
-    head
+    preprocess(&head)
 }
 
 /// Colour-space helpers and three.js's tone mapping operators (tonemapping_pars_fragment).
