@@ -20,6 +20,25 @@ const GREP = new RegExp(arg("grep", "."), "i"), DUMP = arg("dump", ""), FRAMES =
 const W = 320, H = 240;
 const ctx = {};
 vm.runInNewContext(fs.readFileSync(path.join(ROOT, "playground/examples.js"), "utf8") + ";this.EXAMPLES=EXAMPLES;", ctx);
+// scenes the playground has no example of
+Object.assign(ctx.EXAMPLES, {
+  "(test) Dashed lines and a dashed circle": `
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x15171c);
+const camera = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 100);
+camera.position.set(0, 2, 7); camera.lookAt(0, 0, 0);
+const pts = [];
+for (let i = 0; i <= 64; i++) { const a = i / 64 * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a) * 2.5, Math.sin(a * 3) * 0.6, Math.sin(a) * 2.5)); }
+const loop = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: 0xffaa33, dashSize: 0.3, gapSize: 0.15 }));
+loop.computeLineDistances();
+scene.add(loop);
+const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.6, 1.6, 1.6)), new THREE.LineDashedMaterial({ color: 0x66ccff, dashSize: 0.1, gapSize: 0.1, scale: 2 }));
+box.computeLineDistances();
+box.rotation.set(0.4, 0.6, 0);
+scene.add(box);
+renderer.setAnimationLoop(() => renderer.render(scene, camera));
+`,
+});
 const LIB = ["build/rangerthree-core.js", "js/three.js", "js/three-scene.js", "js/three-curves.js", "js/three-renderer.js", "js/three-webgl.js", "js/gpu-webgl2.js"]
   .map((f) => fs.readFileSync(path.join(ROOT, f), "utf8")).join("\n;\n");
 

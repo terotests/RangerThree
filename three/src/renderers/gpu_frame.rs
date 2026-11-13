@@ -3,12 +3,12 @@
 //! (js/three-webgl.js), so any executor (WebGL2, OpenGL ES 3 / GL 3.3,
 //! later WebGPU) draws the same pixels without frame logic of its own.
 //!
-//! Covered so far: meshes, instanced meshes, lines and points with every
+//! Covered so far: meshes, instanced meshes, sprites, lines (dashed too) and points with every
 //! material kind the main program shades and its texture maps; all light
 //! kinds except rect area lights; fog, tone mapping, output colour space,
 //! blending, sides, wireframe, draw ranges and groups. A frame that needs
-//! more (an environment, shadow maps, transmission, sprites, dashed lines,
-//! morph targets, a texture background) is reported in `GpuFrame::missing`,
+//! more (an environment, shadow maps, transmission, morph targets, a
+//! texture background) is reported in `GpuFrame::missing`,
 //! and the host draws it with the WebGL2 backend until those parts move
 //! here too.
 //!
@@ -21,7 +21,7 @@
 
 use ranger::prelude::*;
 
-use crate::core::object3d::{Background, ObjectKind, ObjectRef};
+use crate::core::object3d::{Background, MeshData, ObjectKind, ObjectRef};
 use crate::materials::material::{Blending, Material, MaterialKind, MaterialRef};
 use crate::maths::color::{linear_to_srgb, Color};
 use crate::maths::matrix4::Matrix4;
@@ -423,6 +423,7 @@ impl GpuRenderer {
                 ObjectKind::Line(d) => d.clone(),
                 ObjectKind::LineSegments(d) => d.clone(),
                 ObjectKind::LineLoop(d) => d.clone(),
+                ObjectKind::Sprite(sd) => MeshData::new(sd.geometry.clone(), sd.material.clone()),
                 _ => continue,
             };
             if data.geometry.borrow().id == 0 {
@@ -457,6 +458,7 @@ impl GpuRenderer {
                 ObjectKind::Line(d) => d.clone(),
                 ObjectKind::LineSegments(d) => d.clone(),
                 ObjectKind::LineLoop(d) => d.clone(),
+                ObjectKind::Sprite(sd) => MeshData::new(sd.geometry.clone(), sd.material.clone()),
                 _ => continue,
             };
             for m in data.materials.iter() {
@@ -737,10 +739,7 @@ impl GpuRenderer {
             ObjectKind::Line(d) => d.clone(),
             ObjectKind::LineSegments(d) => d.clone(),
             ObjectKind::LineLoop(d) => d.clone(),
-            ObjectKind::Sprite(_) => {
-                frame.missing.push(String::from("sprites"));
-                return;
-            }
+            ObjectKind::Sprite(sd) => MeshData::new(sd.geometry.clone(), sd.material.clone()),
             _ => return,
         };
         let groups = data.geometry.borrow().groups.clone();
@@ -789,10 +788,8 @@ impl GpuRenderer {
             frame.missing.push(String::from("environment map"));
             return;
         }
-        if m.kind == MaterialKind::LineDashed {
-            frame.missing.push(String::from("dashed lines"));
-            return;
-        }
+        let dashed = m.kind == MaterialKind::LineDashed;
+        let sprite = kind == 7;
         if !data.morph_target_influences.is_empty() {
             frame.missing.push(String::from("morph targets"));
             return;
@@ -853,7 +850,19 @@ impl GpuRenderer {
         if !colored {
             c.attrib(3, 0, 3, 0, 0, 0, &vec![1.0, 1.0, 1.0, 1.0]);
         }
-        c.attrib(9, 0, 1, 0, 0, 0, &vec![0.0, 0.0, 0.0, 0.0]);
+        let mut has_distance = false;
+        if dashed {
+            if let Some(ld) = geometry.get_attribute("lineDistance") {
+                let la = ld.borrow();
+                let key = gid.clone() + ":lineDistance";
+                let b = self.buffer(c, &key, la.version, &la.array, false, la.usage == 35048);
+                c.attrib(9, b, 1, (la.item_size as i64) * 4, 0, 0, &Vec::new());
+                has_distance = true;
+            }
+        }
+        if !has_distance {
+            c.attrib(9, 0, 1, 0, 0, 0, &vec![0.0, 0.0, 0.0, 0.0]);
+        }
         let mut instances: i64 = 0;
         let oid = o.id.to_string();
         if kind == 2 {
@@ -939,11 +948,11 @@ impl GpuRenderer {
             if s.output_linear { 1 } else { 0 },
             if m.premultiplied_alpha { 1 } else { 0 },
             if has_emap { 1 } else { 0 },
-            0,
+            if dashed { 1 } else { 0 },
             0,
             if instances > 0 { 1 } else { 0 },
             if has_disp { 1 } else { 0 },
-            0,
+            if sprite { 1 } else { 0 },
             mu[15] as i64,
             if lit { 1 } else { 0 },
             if mu[14] > 0.5 { 1 } else { 0 },
@@ -969,7 +978,13 @@ impl GpuRenderer {
         c.uniform(self.loc("u_model"), U_MAT4, &elements(&o.matrix_world));
         c.uniform(self.loc("u_normalMat"), U_MAT3, &normal_matrix(&o.matrix_world.elements));
         c.uniform(self.loc("u_uvt"), U_MAT3, &map_transform(&m));
-        c.uniform(self.loc("u_dashScale"), U_FLOAT, &vec![0.0]);
+        if dashed {
+            c.uniform(self.loc("u_dashScale"), U_FLOAT, &vec![m.scale]);
+            c.uniform(self.loc("u_dashSize"), U_FLOAT, &vec![m.dash_size]);
+            c.uniform(self.loc("u_dashTotal"), U_FLOAT, &vec![m.dash_size + m.gap_size]);
+        } else {
+            c.uniform(self.loc("u_dashScale"), U_FLOAT, &vec![0.0]);
+        }
         if has_disp {
             c.uniform(self.loc("u_dispT"), U_MAT3, &disp_t);
             c.uniform(self.loc("u_dispScale"), U_FLOAT, &vec![m.displacement_scale]);
@@ -991,7 +1006,15 @@ impl GpuRenderer {
         }
         c.uniform(self.loc("u_trans"), U_VEC4, &vec![0.0, 0.0, 0.0, 0.0]);
         c.uniform_int(self.loc("u_instanced"), if instances > 0 { 1 } else { 0 });
-        c.uniform_int(self.loc("u_sprite"), 0);
+        c.uniform_int(self.loc("u_sprite"), if sprite { 1 } else { 0 });
+        if sprite {
+            let mut center: Vec<f64> = vec![0.5, 0.5];
+            if let ObjectKind::Sprite(sd) = &o.kind {
+                center = vec![sd.center.x, sd.center.y];
+            }
+            c.uniform(self.loc("u_center"), U_VEC2, &center);
+            c.uniform(self.loc("u_rotation"), U_FLOAT, &vec![m.rotation]);
+        }
         if has_emap {
             c.uniform(self.loc("u_euvt"), U_MAT3, &emap_t);
         }
