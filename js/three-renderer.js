@@ -4,6 +4,10 @@
 // (three-webgl.js over the crate's frame plan, renderers/plan.rs); otherwise,
 // or with { software: true }, the crate's software renderer
 // (renderers/soft.rs) draws into a pixel buffer copied to a 2D canvas.
+// { commands: true } (with gpu-webgl2.js loaded) draws each frame as the
+// crate's GPU command stream (renderers/gpu_frame.rs) played by GpuWebGL2,
+// the path native hosts take; a frame it cannot draw yet falls back to
+// three-webgl.js.
 (function (T, R) {
   "use strict";
   function WebGLRenderer(parameters) {
@@ -32,8 +36,12 @@
         try { this._gpu = new T.__WebGL2Backend(gl, this); } catch (e) { if (typeof console !== "undefined") console.warn(String(e)); this._gpu = null; }
       }
     }
-    // "webgl2" or "software"
-    this.backend = this._gpu ? "webgl2" : "software";
+    this._cmd = null;
+    if (this._gpu && p.commands === true && typeof GpuWebGL2 !== "undefined" && R.GpuRenderer) {
+      this._cmd = { crate: R.GpuRenderer.new_(), player: new GpuWebGL2(this._gpu.gl), fallback: 0 };
+    }
+    // "commands", "webgl2" or "software"
+    this.backend = this._cmd ? "commands" : this._gpu ? "webgl2" : "software";
     if (this.domElement) this._resize();
   }
   var P = WebGLRenderer.prototype;
@@ -113,7 +121,37 @@
     for (var k in seen) count++;
     this.info.memory.textures = count;
   };
+  // one frame as GPU commands; false when the crate cannot draw it yet
+  P._renderCommands = function (scene, camera) {
+    var c = this._cmd, gl = this._gpu.gl, s = c.settings;
+    if (!s) {
+      s = c.settings = R.GpuSettings.new_(gl.drawingBufferWidth, gl.drawingBufferHeight);
+      s.half_float = !!gl.getExtension("EXT_color_buffer_float");
+      s.float_linear = !!gl.getExtension("OES_texture_float_linear");
+      s.samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES));
+    }
+    s.width = gl.drawingBufferWidth; s.height = gl.drawingBufferHeight;
+    s.pixel_ratio = this._pixelRatio; s.tone_mapping = this.toneMapping | 0;
+    s.exposure = this.toneMappingExposure === undefined ? 1 : this.toneMappingExposure;
+    s.output_linear = this.outputColorSpace === "srgb-linear";
+    s.shadows = !!this.shadowMap.enabled; s.shadow_type = this.shadowMap.type | 0;
+    s.clear_color = this._soft.clear_color; s.clear_alpha = this._soft.clear_alpha;
+    GpuWebGL2.uploadImages(c.crate, scene, decodeImage);
+    var frame = c.crate.render(scene, camera, s);
+    if (frame.missing.length) {
+      if (!c.fallback++ && typeof console !== "undefined") console.warn("GPU commands: " + frame.missing.join(", ") + "; drawn by the WebGL2 backend");
+      return false;
+    }
+    c.player.run(frame.commands);
+    var info = this.info.render;
+    info.calls = frame.calls; info.triangles = frame.triangles; info.lines = frame.lines; info.points = frame.points;
+    return true;
+  };
   P.render = function (scene, camera) {
+    if (this._cmd && this._renderCommands(scene, camera)) {
+      this.info.render.frame++;
+      return;
+    }
     if (this._gpu) {
       this._gpu.render(scene, camera);
       this.info.render.frame++;

@@ -6,7 +6,7 @@ var Q = new URLSearchParams(location.search);
 var impl = Q.get("impl");
 function load(src) { document.write('<script src="' + src + '"><\/script>'); }
 if (impl === "ref") { window.module = { exports: {} }; window.exports = module.exports; load("three.cjs"); }
-else { ["rangerthree-core.js", "three.js", "three-scene.js", "three-curves.js", "three-renderer.js", "three-webgl.js"].forEach(load); }
+else { ["rangerthree-core.js", "three.js", "three-scene.js", "three-curves.js", "three-renderer.js", "three-webgl.js", "gpu-webgl2.js"].forEach(load); }
 load("examples.js");
 </script>
 <script type="importmap">{"imports":{"three":"/three-shim.js"}}</script>
@@ -17,6 +17,7 @@ window.__run = function () {
   var canvas = document.getElementById("c");
   var opts = { canvas: canvas, preserveDrawingBuffer: true, antialias: true };
   if (Q.get("backend") === "software") opts.software = true;
+  if (Q.get("backend") === "commands") opts.commands = true;
   if (Q.get("alpha") === "1") opts.alpha = true;
   var renderer = new THREE.WebGLRenderer(opts);
   if (Q.get("tone")) renderer.toneMapping = +Q.get("tone");

@@ -196,6 +196,8 @@ renderer.setAnimationLoop(() => renderer.render(scene, camera));
 `,
 };
 Object.assign(ctx.EXAMPLES, THREE_REF);
+// playground examples with shader materials or morph targets are checked against three.js too
+for (const [name, code] of Object.entries(ctx.EXAMPLES)) if (!THREE_REF[name] && /ShaderMaterial|morphAttributes/.test(code)) THREE_REF[name] = code;
 // the shadow example with the other shadow map types
 const SHADOWS = ctx.EXAMPLES["Shadows: sun, spot and point"];
 if (SHADOWS) {
@@ -245,7 +247,7 @@ async function threeRef(code) {
     renderer.setSize(W, H, false);
     let loop = null;
     renderer.setAnimationLoop = (fn) => { loop = fn; };
-    new Function("THREE", "renderer", code)(THREE, renderer);
+    new Function("THREE", "renderer", "canvas", "orbit", code)(THREE, renderer, canvas, (camera, target) => camera.lookAt(target || new THREE.Vector3()));
     loop(1000); loop(1000);
     const gl = renderer.getContext(), px = new Uint8Array(W * H * 4);
     gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);

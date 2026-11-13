@@ -1821,6 +1821,18 @@ impl GpuRenderer {
                 }
             }
         }
+        if name == "normal" {
+            // three.js normalizes each vertex normal before it is interpolated; a blend of
+            // targets is not unit length, and interpolating it unnormalized shades differently
+            for i in 0..n {
+                let l = (out[i * 3] * out[i * 3] + out[i * 3 + 1] * out[i * 3 + 1] + out[i * 3 + 2] * out[i * 3 + 2]).sqrt();
+                if l > 0.0 {
+                    out[i * 3] /= l;
+                    out[i * 3 + 1] /= l;
+                    out[i * 3 + 2] /= l;
+                }
+            }
+        }
         if id == 0 {
             id = self.id();
         }
@@ -2020,6 +2032,16 @@ impl GpuRenderer {
                     c.attrib(loc, b, size, (aa.item_size as i64) * 4, 0, 0, &Vec::new());
                 }
                 None => c.attrib(loc, 0, 4, 0, 0, 0, &vec![0.0, 0.0, 0.0, 0.0]),
+            }
+        }
+        // three.js feeds a shader every attribute it declares, vertexColors or not
+        if !colors {
+            if let Some(a) = g.get_attribute("color") {
+                let aa = a.borrow();
+                let bkey = gid.clone() + ":color";
+                let b = self.buffer(c, &bkey, aa.version, &aa.array, false, aa.usage == 35048);
+                let size = if aa.item_size < 4 { aa.item_size as i64 } else { 4 };
+                c.attrib(3, b, size, (aa.item_size as i64) * 4, 0, 0, &Vec::new());
             }
         }
         true

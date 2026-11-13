@@ -834,5 +834,268 @@ renderer.setAnimationLoop((t) => {
   velvet.rotation.set(t / 1900, t / 1300, 0);
   gold.rotation.set(t / 2300, t / 1500, 0);
   renderer.render(scene, camera);
+});`,
+  "Shader: plasma sphere (ShaderMaterial)": `
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0d12);
+const camera = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 100);
+camera.position.set(0, 0, 4.2);
+orbit(camera);
+
+// your own GLSL: three.js adds the matrices, position, normal and uv
+const material = new THREE.ShaderMaterial({
+  uniforms: {
+    time: { value: 0 },
+    colorA: { value: new THREE.Color(0xff3d7f) },
+    colorB: { value: new THREE.Color(0x3dd6ff) },
+  },
+  vertexShader: \`uniform float time;
+varying vec3 vNormal;
+varying vec3 vPos;
+void main() {
+  vec3 p = position;
+  float wave = sin(p.x * 4.0 + time) * sin(p.y * 4.0 + time * 1.3) * sin(p.z * 4.0 + time * 0.7);
+  p += normal * wave * 0.12;
+  vPos = p;
+  vNormal = normalize(normalMatrix * normal);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+}\`,
+  fragmentShader: \`uniform float time;
+uniform vec3 colorA;
+uniform vec3 colorB;
+varying vec3 vNormal;
+varying vec3 vPos;
+void main() {
+  float v = sin(vPos.x * 6.0 + time) + sin(vPos.y * 7.0 - time * 1.2) + sin(length(vPos.xz) * 9.0 + time * 0.8);
+  vec3 c = mix(colorA, colorB, 0.5 + 0.5 * sin(v * 1.6));
+  float rim = pow(1.0 - abs(vNormal.z), 2.0);
+  gl_FragColor = vec4(c + rim * 0.6, 1.0);
+}\`,
+});
+const ball = new THREE.Mesh(new THREE.IcosahedronGeometry(1.2, 32), material);
+scene.add(ball);
+
+renderer.setAnimationLoop((t) => {
+  material.uniforms.time.value = t / 1000;
+  ball.rotation.y = t / 4000;
+  renderer.render(scene, camera);
+});`,
+
+  "Shader: dissolve with a noise texture": `
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14161c);
+const camera = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 100);
+camera.position.set(0, 1, 5);
+orbit(camera);
+
+// tiling value noise in a DataTexture (seeded, so every run looks the same)
+const N = 128, G = 16, px = new Uint8Array(N * N * 4);
+let seed = 3;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const grid = [];
+for (let i = 0; i < G * G; i++) grid.push(rnd());
+const at = (x, y) => grid[(y % G) * G + (x % G)];
+for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+  let v = 0, amp = 0.5, f = 4;
+  for (let o = 0; o < 3; o++, amp *= 0.5, f *= 2) {
+    const gx = x / N * f, gy = y / N * f, ix = Math.floor(gx), iy = Math.floor(gy);
+    const sx = (gx - ix) * (gx - ix) * (3 - 2 * (gx - ix)), sy = (gy - iy) * (gy - iy) * (3 - 2 * (gy - iy));
+    const a = at(ix, iy) * (1 - sx) + at(ix + 1, iy) * sx, b = at(ix, iy + 1) * (1 - sx) + at(ix + 1, iy + 1) * sx;
+    v += (a * (1 - sy) + b * sy) * amp;
+  }
+  const o = (y * N + x) * 4, n = Math.round(v / 0.875 * 255);
+  px[o] = px[o + 1] = px[o + 2] = n; px[o + 3] = 255;
+}
+const noise = new THREE.DataTexture(px, N, N);
+noise.wrapS = noise.wrapT = THREE.RepeatWrapping;
+noise.magFilter = noise.minFilter = THREE.LinearFilter;
+noise.needsUpdate = true;
+
+const material = new THREE.ShaderMaterial({
+  side: THREE.DoubleSide,
+  uniforms: { noise: { value: noise }, threshold: { value: 0.5 }, edgeColor: { value: new THREE.Color(0xff7a1a) } },
+  vertexShader: \`varying vec2 vUv;
+varying vec3 vN;
+void main() {
+  vUv = uv;
+  vN = normalize(normalMatrix * normal);
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}\`,
+  fragmentShader: \`uniform sampler2D noise;
+uniform float threshold;
+uniform vec3 edgeColor;
+varying vec2 vUv;
+varying vec3 vN;
+void main() {
+  float n = texture2D(noise, vUv * vec2(4.0, 1.0)).r;
+  if (n < threshold) discard;
+  float edge = smoothstep(threshold + 0.06, threshold, n);
+  vec3 nn = normalize(vN) * (gl_FrontFacing ? 1.0 : -1.0);
+  float light = 0.3 + 0.7 * max(dot(nn, normalize(vec3(0.4, 0.8, 0.5))), 0.0);
+  gl_FragColor = vec4(mix(vec3(0.75, 0.78, 0.85) * light, edgeColor * 2.0, edge), 1.0);
+}\`,
+});
+const knot = new THREE.Mesh(new THREE.TorusKnotGeometry(1, 0.35, 160, 20), material);
+scene.add(knot);
+// a glowing core shows through the holes
+const core = new THREE.Mesh(new THREE.SphereGeometry(0.55, 32, 16), new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0xff5a00, emissiveIntensity: 1.5 }));
+scene.add(core);
+
+renderer.setAnimationLoop((t) => {
+  material.uniforms.threshold.value = 0.45 + 0.4 * Math.sin(t / 1500);
+  knot.rotation.set(t / 5000, t / 3000, 0);
+  renderer.render(scene, camera);
+});`,
+
+  "Raw shader: a swarm of triangles (RawShaderMaterial)": `
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101010);
+const camera = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 10);
+camera.position.z = 2;
+orbit(camera);
+
+// 500 triangles, each corner with its own RGBA colour
+let seed = 11;
+const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+const positions = [], colors = [];
+for (let i = 0; i < 500 * 3; i++) {
+  positions.push(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5);
+  colors.push(rnd(), rnd(), rnd(), rnd());
+}
+const geometry = new THREE.BufferGeometry();
+geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 4));
+
+// RawShaderMaterial: nothing is added, the shaders declare all they use
+const material = new THREE.RawShaderMaterial({
+  uniforms: { time: { value: 1.0 } },
+  side: THREE.DoubleSide,
+  transparent: true,
+  vertexShader: \`precision mediump float;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+attribute vec3 position;
+attribute vec4 color;
+varying vec3 vPosition;
+varying vec4 vColor;
+void main() {
+  vPosition = position;
+  vColor = color;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}\`,
+  fragmentShader: \`precision mediump float;
+uniform float time;
+varying vec3 vPosition;
+varying vec4 vColor;
+void main() {
+  vec4 color = vec4(vColor);
+  color.r += sin(vPosition.x * 10.0 + time) * 0.5;
+  gl_FragColor = color;
+}\`,
+});
+const swarm = new THREE.Mesh(geometry, material);
+scene.add(swarm);
+
+renderer.setAnimationLoop((t) => {
+  swarm.rotation.y = t * 0.0005;
+  material.uniforms.time.value = t * 0.005;
+  renderer.render(scene, camera);
+});`,
+
+  "Morph targets: shape-shifting blob": `
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1d24);
+const camera = new THREE.PerspectiveCamera(45, 4 / 3, 0.1, 100);
+camera.position.set(0, 0.6, 5);
+orbit(camera);
+
+// two morph targets of a sphere: a rounded cube and a spiky ball
+const geometry = new THREE.SphereGeometry(1, 64, 32);
+const p = geometry.attributes.position;
+const cube = [], spiky = [];
+for (let i = 0; i < p.count; i++) {
+  const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+  const m = Math.max(Math.abs(x), Math.abs(y), Math.abs(z));
+  cube.push(x / m * 0.85, y / m * 0.85, z / m * 0.85);
+  const r = 1 + 0.18 * Math.sin(Math.atan2(z, x) * 8) * Math.sin(Math.atan2(Math.hypot(x, z), y) * 6);
+  spiky.push(x * r, y * r, z * r);
+}
+// each target brings its own normals, so the lighting follows the shape
+const normalsOf = (pos) => {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(geometry.index);
+  g.computeVertexNormals();
+  return g.attributes.normal;
+};
+geometry.morphAttributes.position = [new THREE.Float32BufferAttribute(cube, 3), new THREE.Float32BufferAttribute(spiky, 3)];
+geometry.morphAttributes.normal = [normalsOf(cube), normalsOf(spiky)];
+
+const blob = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: 0x6ad0ff, roughness: 0.35, metalness: 0.2 }));
+scene.add(blob);
+scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+const key = new THREE.DirectionalLight(0xffffff, 2.2);
+key.position.set(3, 4, 5);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xff9a6a, 1.0);
+fill.position.set(-4, -1, -2);
+scene.add(fill);
+
+renderer.setAnimationLoop((t) => {
+  blob.morphTargetInfluences[0] = 0.5 + 0.5 * Math.sin(t / 900);
+  blob.morphTargetInfluences[1] = 0.5 + 0.5 * Math.sin(t / 1300 + 1);
+  blob.rotation.y = t / 3000;
+  renderer.render(scene, camera);
+});`,
+
+  "Shader instancing: a GLSL 3 wave of boxes": `
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0e1116);
+const camera = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 200);
+camera.position.set(0, 14, 22);
+orbit(camera);
+
+const GRID = 24;
+// GLSL 3 sources (in / out), a #define, and gl_InstanceID to tell the boxes apart
+const material = new THREE.ShaderMaterial({
+  glslVersion: THREE.GLSL3,
+  defines: { GRID: GRID.toFixed(1) },
+  uniforms: { time: { value: 0 } },
+  vertexShader: \`uniform float time;
+out vec3 vColor;
+out vec3 vNormal;
+vec3 hsv(float h, float s, float v) {
+  vec3 k = clamp(abs(mod(h * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+  return v * mix(vec3(1.0), k, s);
+}
+void main() {
+  float x = mod(float(gl_InstanceID), GRID) - GRID * 0.5 + 0.5;
+  float z = floor(float(gl_InstanceID) / GRID) - GRID * 0.5 + 0.5;
+  float h = 0.5 + 0.5 * sin(length(vec2(x, z)) * 0.5 - time);
+  vec3 p = position * vec3(1.0, 0.3 + h * 3.0, 1.0) + vec3(0.0, (0.3 + h * 3.0) * 0.5, 0.0);
+  vColor = hsv(0.55 + h * 0.35, 0.75, 0.9);
+  vNormal = normalize(normalMatrix * mat3(instanceMatrix) * normal);
+  gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(p, 1.0);
+}\`,
+  fragmentShader: \`in vec3 vColor;
+in vec3 vNormal;
+out vec4 outColor;
+void main() {
+  vec3 l = normalize((viewMatrix * vec4(0.4, 1.0, 0.3, 0.0)).xyz);
+  outColor = vec4(vColor * (0.35 + 0.65 * max(dot(normalize(vNormal), l), 0.0)), 1.0);
+}\`,
+});
+const boxes = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 1, 0.8), material, GRID * GRID);
+const dummy = new THREE.Object3D();
+for (let i = 0; i < GRID * GRID; i++) {
+  dummy.position.set((i % GRID) - GRID / 2 + 0.5, 0, Math.floor(i / GRID) - GRID / 2 + 0.5);
+  dummy.updateMatrix();
+  boxes.setMatrixAt(i, dummy.matrix);
+}
+scene.add(boxes);
+
+renderer.setAnimationLoop((t) => {
+  material.uniforms.time.value = t / 400;
+  renderer.render(scene, camera);
 });`
 });
