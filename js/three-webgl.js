@@ -41,12 +41,7 @@
     return s;
   }
 
-  var NAMES = ["u_model", "u_view", "u_proj", "u_uvt", "u_instanced", "u_pointSize", "u_pointScale", "u_sizeAtt", "u_mat", "u_lights",
-    "u_nlights", "u_fog", "u_cam", "u_map", "u_hasMap", "u_points", "u_hasNormal", "u_opaque", "u_tone", "u_exposure", "u_sprite", "u_center", "u_rotation", "u_emap", "u_hasEmap", "u_euvt", "u_dfg",
-    "u_alphaMap", "u_roughMap", "u_metalMap", "u_normalMap", "u_aoMap", "u_matcap", "u_gradMap", "u_maps", "u_linearOut", "u_premult", "u_t", "u_normalScale", "u_aoIntensity",
-    "u_dispMap", "u_hasDisp", "u_dispT", "u_dispScale", "u_dispBias", "u_dashScale", "u_dashed", "u_dashSize", "u_dashTotal", "u_bumpScale", "u_bumpMap", "u_sheen",
-    "u_trans", "u_attColor", "u_transMap", "u_transSize", "u_ltc", "u_envMap", "u_env", "u_envRot", "u_envUV",
-    "u_sh0", "u_sh1", "u_sh2", "u_shc0", "u_shMat", "u_shParam", "u_shSize", "u_receive", "u_normalMat", "u_viewInv"];
+  var NAMES = S.uniform_names();
 
   // the inverse transpose of a 4x4 matrix's upper 3x3 (column-major), into out
   function normalMatrix(e, out) {
