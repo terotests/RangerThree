@@ -5,13 +5,15 @@
 //!   cargo run --release -p gpu-gl --example scenes [W H FRAMES] [--save=dir]
 use gpu_gl::{egl::Headless, read_rgba, Player};
 use rangerthree::core::bounds::set_instance_matrix_at;
-use rangerthree::core::object3d::{add, ensure_instance_colors, look_at, Background, Object3D, ObjectRef};
+use rangerthree::core::object3d::{descendants, ObjectKind, add, ensure_instance_colors, look_at, Background, Object3D, ObjectRef};
 use rangerthree::geometries::primitives::*;
 use rangerthree::materials::material::{Material, MaterialKind};
 use rangerthree::maths::color::{Color, ColorSpace};
 use rangerthree::maths::euler::{Euler, EulerOrder};
 use rangerthree::maths::vector3::Vector3;
 use rangerthree::renderers::gpu_frame::{GpuRenderer, GpuSettings};
+use rangerthree::renderers::soft::SoftRenderer;
+use rangerthree::textures::texture::{Image, Texture, TextureRef};
 use std::time::Instant;
 
 fn scene_with(bg: i64) -> ObjectRef {
@@ -79,8 +81,51 @@ fn instancing(aspect: f64) -> (ObjectRef, ObjectRef, Animate) {
                 i += 1;
             }
         }
+        data.instance_matrix.as_ref().unwrap().borrow_mut().needs_update();
+        data.instance_color.as_ref().unwrap().borrow_mut().needs_update();
     });
     (scene, camera(0.0, 9.0, 16.0, aspect), animate)
+}
+
+fn textured(aspect: f64) -> (ObjectRef, ObjectRef, Animate) {
+    let scene = scene_with(0x202428);
+    // a 64x64 checker as a DataTexture, repeated 3x, nearest filtered
+    let mut px: Vec<u8> = Vec::new();
+    for y in 0..64 {
+        for x in 0..64 {
+            let on = (x / 8 + y / 8) % 2 == 0;
+            px.extend_from_slice(if on { &[240, 200, 80, 255] } else { &[40, 60, 120, 255] });
+        }
+    }
+    let mut tex = Texture::data(Image::new(64, 64, px));
+    tex.wrap_s = 1000;
+    tex.wrap_t = 1000;
+    tex.repeat.set(3.0, 3.0);
+    let mut m = Material::new(MaterialKind::MeshStandard);
+    m.map = Some(tex.shared());
+    m.roughness = 0.7;
+    let cube = Object3D::mesh(box_geometry(2.0, 2.0, 2.0, 1.0, 1.0, 1.0).shared(), m.shared()).shared();
+    add(&scene, &cube);
+    add(&scene, &Object3D::ambient_light(Color::from_hex(0xffffff), 0.4).shared());
+    let sun = Object3D::directional_light(Color::from_hex(0xffffff), 2.0).shared();
+    sun.borrow_mut().position.set(3.0, 4.0, 5.0);
+    add(&scene, &sun);
+    (scene, camera(0.0, 2.0, 5.0, aspect), Box::new(move |t| rot(&cube, t / 1700.0, t / 1100.0, 0.0)))
+}
+
+/// Every map texture in the scene (the GPU renderer already holds their pixels).
+fn soft_textures(scene: &ObjectRef) -> Vec<TextureRef> {
+    let mut out = Vec::new();
+    for o in descendants(scene) {
+        if let ObjectKind::Mesh(d) = &o.borrow().kind {
+            for m in &d.materials {
+                if let Some(t) = &m.borrow().map {
+                    out.push(t.clone());
+                }
+            }
+        }
+    }
+    out
 }
 
 fn main() {
@@ -93,7 +138,7 @@ fn main() {
     player.screen_fb = ctx.fb;
     println!("{} | {}x{}, {} frames", player.describe(), w, h, frames);
     let aspect = w as f64 / h as f64;
-    let scenes: Vec<(&str, fn(f64) -> (ObjectRef, ObjectRef, Animate))> = vec![("torus", torus), ("instancing", instancing)];
+    let scenes: Vec<(&str, fn(f64) -> (ObjectRef, ObjectRef, Animate))> = { let all: Vec<(&str, fn(f64) -> (ObjectRef, ObjectRef, Animate))> = vec![("torus", torus), ("instancing", instancing), ("textured", textured)]; match std::env::var("ONLY") { Ok(n) => all.into_iter().filter(|x| x.0 == n).collect(), Err(_) => all } };
     let mut failed = false;
     // the stream's object ids belong to one GpuRenderer: one renderer per player
     let mut gpu = GpuRenderer::new();
@@ -105,6 +150,7 @@ fn main() {
         for i in 0..frames {
             animate(1000.0 + i as f64 * 16.0);
             let t0 = Instant::now();
+            gpu.upload_images(&scene);
             let frame = gpu.render(&scene, &cam, &s);
             let t1 = Instant::now();
             if !frame.missing.is_empty() {
@@ -125,14 +171,41 @@ fn main() {
             last = Some((px, frame.calls, frame.triangles, frame.commands.count));
         }
         let Some((px, calls, tris, count)) = last else { continue };
+        // the same last frame from the crate's software renderer, as a check that the GPU path draws the scene
+        let mut soft = SoftRenderer::new(w, h);
+        for t in soft_textures(&scene).iter() {
+            soft.upload_texture(&t.borrow());
+        }
+        soft.render(&scene, &cam);
+        let mut sum = 0.0;
+        for y in 0..h as usize {
+            for x in 0..w as usize {
+                let g = (((h as usize - 1 - y) * w as usize) + x) * 4;
+                let sidx = (y * w as usize + x) * 4;
+                for k in 0..3 {
+                    sum += (px[g + k] as f64 - soft.pixels[sidx + k]).abs();
+                }
+            }
+        }
+        let soft_diff = sum / (w * h * 3) as f64;
+        if let Some(dir) = &save {
+            std::fs::create_dir_all(dir).unwrap();
+            let mut out = format!("P6\n{} {}\n255\n", w, h).into_bytes();
+            for i in 0..(w * h) as usize {
+                for k in 0..3 {
+                    out.push(soft.pixels[i * 4 + k] as u8);
+                }
+            }
+            std::fs::write(format!("{}/{}.soft.ppm", dir, name), out).unwrap();
+        }
         let med = |v: &mut Vec<f64>| { v.sort_by(|a, b| a.partial_cmp(b).unwrap()); v[v.len() / 2] };
         let bg = [px[0], px[1], px[2]];
         let drawn = px.chunks(4).filter(|p| [p[0], p[1], p[2]] != bg).count();
         println!(
-            "{:<11} {} calls, {} triangles, {} commands | crate {:.2} ms + player/GPU {:.2} ms (medians) | {:.1} % of pixels drawn",
-            name, calls, tris, count, med(&mut plan), med(&mut play), drawn as f64 * 100.0 / (w * h) as f64
+            "{:<11} {} calls, {} triangles, {} commands | crate {:.2} ms + player/GPU {:.2} ms (medians) | {:.1} % of pixels drawn | software renderer differs by {:.2}",
+            name, calls, tris, count, med(&mut plan), med(&mut play), drawn as f64 * 100.0 / (w * h) as f64, soft_diff
         );
-        if drawn == 0 {
+        if drawn == 0 || soft_diff > 4.0 {
             failed = true;
         }
         if let Some(dir) = &save {

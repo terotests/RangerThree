@@ -7,6 +7,7 @@
 // for OpenGL ES 3 / GL 3.3.
 //
 //   var gpu = new GpuWebGL2(gl);
+//   GpuWebGL2.uploadImages(renderer, scene, decode);   // texture pixels the crate asks for
 //   gpu.run(frame.commands);          // a GpuCommands (ints, floats, texts, bytes)
 (function (root) {
   "use strict";
@@ -65,15 +66,18 @@
           obj[pid] = { prog: p, locs: locs };
           break;
         }
-        case 3: { // TEXTURE id, cube, internal, format, type, w, h, min, mag, wrap s, wrap t, compare, data, offset, n
+        case 3: { // TEXTURE id, cube, internal, format, type, w, h, min, mag, wrap s, wrap t, flags, data, offset, n
           var tid = ints[i], cube = ints[i + 1] === 1, internal = ints[i + 2], format = ints[i + 3], type = ints[i + 4];
           var w = ints[i + 5], h = ints[i + 6], dk = ints[i + 12], off = ints[i + 13], dn = ints[i + 14];
           var tgt = cube ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_2D, px = null;
           if (dk === 1) { px = floats.subarray(f, f + dn); f += dn; }
-          else if (dk === 2) px = bytes.subarray(off, off + dn);
+          // WebGL takes no view of a resizable buffer (the crate's growable Vec<u8>): copy then
+          else if (dk === 2) px = bytes.buffer.resizable ? bytes.slice(off, off + dn) : bytes.subarray(off, off + dn);
           var t = obj[tid] ? obj[tid].tex : gl.createTexture();
+          gl.activeTexture(gl.TEXTURE31); // uploads on a unit no program samples
           gl.bindTexture(tgt, t);
           gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+          gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
           gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
           if (cube) for (var face = 0; face < 6; face++) gl.texImage2D(gl.TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, internal, w, h, 0, format, type, px);
           else gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, type, px);
@@ -81,12 +85,14 @@
           gl.texParameteri(tgt, gl.TEXTURE_MAG_FILTER, ints[i + 8]);
           gl.texParameteri(tgt, gl.TEXTURE_WRAP_S, ints[i + 9]);
           gl.texParameteri(tgt, gl.TEXTURE_WRAP_T, ints[i + 10]);
-          if (ints[i + 11] === 1) {
+          if (ints[i + 11] & 1) {
             gl.texParameteri(tgt, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
             gl.texParameteri(tgt, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
           }
+          if (ints[i + 11] & 2) gl.generateMipmap(tgt);
           gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
           gl.bindTexture(tgt, null);
+          gl.activeTexture(gl.TEXTURE0);
           obj[tid] = { tex: t };
           i += 15;
           break;
@@ -183,7 +189,55 @@
             if (r.tex) gl.deleteTexture(r.tex);
             if (r.prog) gl.deleteProgram(r.prog);
             if (r.fb) gl.deleteFramebuffer(r.fb);
+            if (r.rbs) for (var rb = 0; rb < r.rbs.length; rb++) gl.deleteRenderbuffer(r.rbs[rb]);
+            delete obj[ints[i - 1]];
           }
+          break;
+        }
+        case 12: { // TARGET id, w, h, samples, colour kind, colour, depth kind, depth
+          var gid = ints[i], gw = ints[i + 1], gh = ints[i + 2], samples = ints[i + 3];
+          i += 8;
+          var old = obj[gid];
+          if (old) { gl.deleteFramebuffer(old.fb); for (var ob = 0; ob < old.rbs.length; ob++) gl.deleteRenderbuffer(old.rbs[ob]); }
+          var tg = { fb: gl.createFramebuffer(), rbs: [] };
+          gl.bindFramebuffer(gl.FRAMEBUFFER, tg.fb);
+          for (var at = 0; at < 2; at++) {
+            var ak = ints[i - 4 + at * 2], av = ints[i - 3 + at * 2];
+            var depthAt = av === gl.DEPTH24_STENCIL8 || av === gl.DEPTH32F_STENCIL8 ? gl.DEPTH_STENCIL_ATTACHMENT : gl.DEPTH_ATTACHMENT;
+            var point = at === 0 ? gl.COLOR_ATTACHMENT0 : depthAt;
+            if (ak === 1 || ak >= 3) {
+              if (at === 1) point = gl.DEPTH_ATTACHMENT;
+              gl.framebufferTexture2D(gl.FRAMEBUFFER, point, ak >= 3 ? gl.TEXTURE_CUBE_MAP_POSITIVE_X + ak - 3 : gl.TEXTURE_2D, obj[av].tex, 0);
+            } else if (ak === 2) {
+              var rbo = gl.createRenderbuffer();
+              gl.bindRenderbuffer(gl.RENDERBUFFER, rbo);
+              if (samples > 0) gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, av, gw, gh);
+              else gl.renderbufferStorage(gl.RENDERBUFFER, av, gw, gh);
+              gl.framebufferRenderbuffer(gl.FRAMEBUFFER, point, gl.RENDERBUFFER, rbo);
+              tg.rbs.push(rbo);
+            }
+          }
+          if (ints[i - 4] === 0) { gl.drawBuffers([gl.NONE]); gl.readBuffer(gl.NONE); }
+          if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("gpu-webgl2: target " + gid + " is incomplete");
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          obj[gid] = tg;
+          break;
+        }
+        case 14: { // MIPMAPS texture
+          gl.activeTexture(gl.TEXTURE31);
+          gl.bindTexture(gl.TEXTURE_2D, obj[ints[i++]].tex);
+          gl.generateMipmap(gl.TEXTURE_2D);
+          gl.bindTexture(gl.TEXTURE_2D, null);
+          gl.activeTexture(gl.TEXTURE0);
+          break;
+        }
+        case 13: { // COPY source, destination, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter
+          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, ints[i] ? obj[ints[i]].fb : null);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, ints[i + 1] ? obj[ints[i + 1]].fb : null);
+          gl.blitFramebuffer(ints[i + 2], ints[i + 3], ints[i + 4], ints[i + 5], ints[i + 6], ints[i + 7], ints[i + 8], ints[i + 9], ints[i + 10], ints[i + 11]);
+          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+          i += 12;
           break;
         }
         default:
@@ -191,6 +245,20 @@
       }
     }
     if (f !== floats.length) throw new Error("gpu-webgl2: " + (floats.length - f) + " floats left over");
+  };
+
+  // Hands the crate's GpuRenderer the pixels of the textures it names
+  // (textures_to_upload), decoded by `decode(image, texture)` -> { width,
+  // height, data: RGBA bytes, rows from the top } or null while not ready
+  // (THREE.WebGLRenderer.decodeImage: data textures, images, canvases).
+  GpuWebGL2.uploadImages = function (renderer, scene, decode) {
+    var list = renderer.textures_to_upload(scene);
+    for (var k = 0; k < list.length; k++) {
+      var tex = list[k], px = decode(tex.image, tex);
+      if (!px) continue;
+      var d = px.data, buf = { byteLength: d.byteLength, _view: new DataView(d.buffer, d.byteOffset, d.byteLength) };
+      renderer.set_texture_image(tex.id, tex.version, px.width, px.height, buf);
+    }
   };
 
   function compile(gl, type, src) {

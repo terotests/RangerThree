@@ -20,6 +20,31 @@ const GREP = new RegExp(arg("grep", "."), "i"), DUMP = arg("dump", ""), FRAMES =
 const W = 320, H = 240;
 const ctx = {};
 vm.runInNewContext(fs.readFileSync(path.join(ROOT, "playground/examples.js"), "utf8") + ";this.EXAMPLES=EXAMPLES;", ctx);
+// scenes the playground has no example of
+Object.assign(ctx.EXAMPLES, {
+  "(test) Dashed lines and a dashed circle": `
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x15171c);
+const camera = new THREE.PerspectiveCamera(50, 4 / 3, 0.1, 100);
+camera.position.set(0, 2, 7); camera.lookAt(0, 0, 0);
+const pts = [];
+for (let i = 0; i <= 64; i++) { const a = i / 64 * Math.PI * 2; pts.push(new THREE.Vector3(Math.cos(a) * 2.5, Math.sin(a * 3) * 0.6, Math.sin(a) * 2.5)); }
+const loop = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: 0xffaa33, dashSize: 0.3, gapSize: 0.15 }));
+loop.computeLineDistances();
+scene.add(loop);
+const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.6, 1.6, 1.6)), new THREE.LineDashedMaterial({ color: 0x66ccff, dashSize: 0.1, gapSize: 0.1, scale: 2 }));
+box.computeLineDistances();
+box.rotation.set(0.4, 0.6, 0);
+scene.add(box);
+renderer.setAnimationLoop(() => renderer.render(scene, camera));
+`,
+});
+// the shadow example with the other shadow map types
+const SHADOWS = ctx.EXAMPLES["Shadows: sun, spot and point"];
+if (SHADOWS) {
+  ctx.EXAMPLES["(test) Shadows, basic"] = SHADOWS.replace("THREE.PCFShadowMap", "THREE.BasicShadowMap");
+  ctx.EXAMPLES["(test) Shadows, VSM"] = SHADOWS.replace("THREE.PCFShadowMap", "THREE.VSMShadowMap");
+}
 const LIB = ["build/rangerthree-core.js", "js/three.js", "js/three-scene.js", "js/three-curves.js", "js/three-renderer.js", "js/three-webgl.js", "js/gpu-webgl2.js"]
   .map((f) => fs.readFileSync(path.join(ROOT, f), "utf8")).join("\n;\n");
 
@@ -57,6 +82,7 @@ for (const name of Object.keys(ctx.EXAMPLES)) {
     const canvas = document.getElementById("c"), gl = renderer.getContext ? renderer.getContext() : canvas.getContext("webgl2");
     const read = () => { const px = new Uint8Array(canvas.width * canvas.height * 4); gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, px); return px; };
     const R = RangerThreeCore, t = 1000;
+    const byteArray = (b) => !b ? new Uint8Array(0) : b._view ? new Uint8Array(b._view.buffer, b._view.byteOffset, b.byteLength) : Uint8Array.from(b);
     const tw = [], tg = [];
     let a, frame;
     for (let i = 0; i < frames; i++) {
@@ -68,10 +94,11 @@ for (const name of Object.keys(ctx.EXAMPLES)) {
     s.pixel_ratio = renderer._pixelRatio; s.tone_mapping = renderer.toneMapping | 0;
     s.exposure = renderer.toneMappingExposure === undefined ? 1 : renderer.toneMappingExposure;
     s.output_linear = renderer.outputColorSpace === "srgb-linear";
-    s.shadows = !!(renderer.shadowMap && renderer.shadowMap.enabled); s.clear_color = renderer._soft.clear_color; s.clear_alpha = renderer._soft.clear_alpha;
+    s.shadows = !!(renderer.shadowMap && renderer.shadowMap.enabled); s.half_float = !!gl.getExtension("EXT_color_buffer_float"); s.shadow_type = renderer.shadowMap ? renderer.shadowMap.type | 0 : 1; s.float_linear = !!gl.getExtension("OES_texture_float_linear"); s.samples = Math.min(4, gl.getParameter(gl.MAX_SAMPLES)); s.clear_color = renderer._soft.clear_color; s.clear_alpha = renderer._soft.clear_alpha;
     let b, first = null; const pl = [], py = [];
     for (let i = 0; i < frames; i++) {
       const t0 = performance.now();
+      GpuWebGL2.uploadImages(gpu, __scene, THREE.WebGLRenderer.decodeImage);
       frame = gpu.render(__scene, __camera, s);
       const t1 = performance.now();
       if (frame.missing.length) return { missing: frame.missing };
@@ -87,7 +114,7 @@ for (const name of Object.keys(ctx.EXAMPLES)) {
     const c = frame.commands;
     return { mean: sum / a.length, max, far: far / a.length, webgl: med(tw), gpu: med(tg), plan: med(pl), play: med(py),
       commands: c.count, ints: c.ints.length, floats: c.floats.length,
-      dump: { ints: first.ints, floats: Array.from(first.floats), texts: first.texts, pixels: Array.from(b), w: canvas.width, h: canvas.height } };
+      dump: { ints: first.ints, floats: Array.from(first.floats), texts: first.texts, bytes: Array.from(byteArray(first.bytes)), pixels: Array.from(b), w: canvas.width, h: canvas.height } };
   }, { lib: LIB, script: pageScript(ctx.EXAMPLES[name]), frames: FRAMES });
   if (r.error) { rows.push(`ERROR ${name}: ${r.error}`); continue; }
   if (r.missing) { rows.push(`  --  ${name}: needs ${r.missing.join(", ")}`); continue; }
@@ -100,7 +127,7 @@ for (const name of Object.keys(ctx.EXAMPLES)) {
   if (DUMP) {
     const slug = name.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase();
     const d = r.dump;
-    fs.writeFileSync(path.join(DUMP, slug + ".json"), JSON.stringify({ name, w: d.w, h: d.h, ints: d.ints, floats: d.floats, texts: d.texts }));
+    fs.writeFileSync(path.join(DUMP, slug + ".json"), JSON.stringify({ name, w: d.w, h: d.h, ints: d.ints, floats: d.floats, texts: d.texts, bytes: d.bytes }));
     fs.writeFileSync(path.join(DUMP, slug + ".rgba"), Buffer.from(d.pixels));
   }
 }
