@@ -22,6 +22,7 @@
   // ---- constants ---------------------------------------------------------
   var C = {
     FrontSide: 0, BackSide: 1, DoubleSide: 2,
+    GLSL1: "100", GLSL3: "300 es",
     NoBlending: 0, NormalBlending: 1, AdditiveBlending: 2, SubtractiveBlending: 3, MultiplyBlending: 4, CustomBlending: 5,
     UVMapping: 300, CubeReflectionMapping: 301, CubeRefractionMapping: 302,
     EquirectangularReflectionMapping: 303, EquirectangularRefractionMapping: 304, CubeUVReflectionMapping: 306,
@@ -526,7 +527,16 @@
     }, function (params) { this.setValues(params); });
     F.flag(T[name], "is" + name);
   });
-  accessor(T.Material.prototype, "envMapRotation", function () { if (!this._emr) def(this, "_emr", new T.Euler()); return this._emr; });
+  // an Euler kept in step with a crate Euler field (`set` writes it when the Euler changes)
+  function syncedEuler(self, hidden, set) {
+    if (!self[hidden]) {
+      var e = new T.Euler();
+      e._onChange(function () { set(self, eulerCore(e)); });
+      def(self, hidden, e);
+    }
+    return self[hidden];
+  }
+  accessor(T.Material.prototype, "envMapRotation", function () { return syncedEuler(this, "_emr", function (m, v) { m.env_map_rotation = v; }); });
   (function () {
     var sp = T.ShaderMaterial.prototype;
     ["uniforms", "defines", "vertexShader", "fragmentShader", "lights", "clipping", "glslVersion", "extensions", "uniformsGroups"].forEach(function (k) {
@@ -542,6 +552,47 @@
       }, function (v) { def(this, "_sh_" + k, v); });
     });
   })();
+  // a ShaderMaterial uniform value as the crate's numbers (ShaderUniform.values)
+  function shaderNumbers(v, out) {
+    if (typeof v === "number") out.push(v);
+    else if (typeof v === "boolean") out.push(v ? 1 : 0);
+    else if (!v) return out;
+    else if (v.isColor) out.push(v.r, v.g, v.b);
+    else if (v.isVector2) out.push(v.x, v.y);
+    else if (v.isVector3) out.push(v.x, v.y, v.z);
+    else if (v.isVector4 || v.isQuaternion) out.push(v.x, v.y, v.z, v.w);
+    else if (v.isMatrix3 || v.isMatrix4) for (var i = 0; i < v.elements.length; i++) out.push(v.elements[i]);
+    else if (v.length !== undefined) for (var j = 0; j < v.length; j++) shaderNumbers(v[j], out);
+    return out;
+  }
+  // copies a ShaderMaterial's sources, defines and current uniform values into the crate material
+  // (uniform values change in place, so the GPU command path calls this before each frame)
+  function syncShaderMaterial(m) {
+    m.vertex_shader = m.vertexShader;
+    m.fragment_shader = m.fragmentShader;
+    m.glsl3 = m.glslVersion === "300 es";
+    var d = [], defs = m.defines || {};
+    Object.keys(defs).forEach(function (k) {
+      var v = defs[k];
+      if (v === false) return;
+      d.push(k, v === true ? "" : String(v));
+    });
+    m.shader_defines = d;
+    var us = [], uni = m.uniforms || {};
+    Object.keys(uni).forEach(function (k) {
+      var u = uni[k];
+      if (!u) return;
+      if (u.value && u.value.isTexture) us.push(R.ShaderUniform.with_texture(k, u.value));
+      else us.push(R.ShaderUniform.new_(k, shaderNumbers(u.value, [])));
+    });
+    m.shader_uniforms = us;
+  }
+  T.__syncShaderMaterials = function (scene) {
+    scene.traverseVisible(function (o) {
+      var ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+      for (var i = 0; i < ms.length; i++) if (ms[i] && ms[i].isShaderMaterial) syncShaderMaterial(ms[i]);
+    });
+  };
 
   // ---- Texture -----------------------------------------------------------
   var textureIds = { n: 0 };
@@ -1028,8 +1079,8 @@
       else d.background = new R.Background_Texture(v);
     });
     accessor(p, "fog", function () { var f = this.kind.f0.fog; return f === undefined ? null : f; }, function (v) { this.kind.f0.fog = v === null ? undefined : v; });
-    accessor(p, "backgroundRotation", function () { if (!this._br) def(this, "_br", new T.Euler()); return this._br; });
-    accessor(p, "environmentRotation", function () { if (!this._er) def(this, "_er", new T.Euler()); return this._er; });
+    accessor(p, "backgroundRotation", function () { return syncedEuler(this, "_br", function (o, v) { o.kind.f0.background_rotation = v; }); });
+    accessor(p, "environmentRotation", function () { return syncedEuler(this, "_er", function (o, v) { o.kind.f0.environment_rotation = v; }); });
     def(p, "toJSONExtra", function (o) {
       if (this.fog) o.fog = this.fog.toJSON();
       if (this.background && this.background.isColor) o.background = this.background.getHex();

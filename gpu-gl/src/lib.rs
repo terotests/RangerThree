@@ -20,6 +20,7 @@ enum Obj {
     Buffer { buf: GLuint, length: i64 },
     Program { prog: GLuint, locs: Vec<GLint> },
     Texture { tex: GLuint },
+    Target { fb: GLuint, rbs: Vec<GLuint> },
 }
 
 /// The GPU objects of one GL context, and the stream player for it. The
@@ -145,7 +146,7 @@ impl Player {
                         self.objs.insert(pid, Obj::Program { prog: p, locs });
                     }
                     3 => {
-                        // TEXTURE id, cube, internal, format, type, w, h, min, mag, wrap s, wrap t, compare, data, offset, n
+                        // TEXTURE id, cube, internal, format, type, w, h, min, mag, wrap s, wrap t, flags, data, offset, n
                         let a = ints.get(i..i + 15).ok_or("gpu-gl: texture command cut")?;
                         i += 15;
                         let (tid, cube) = (a[0], a[1] == 1);
@@ -168,9 +169,11 @@ impl Player {
                                 t
                             }
                         };
+                        (gl.ActiveTexture)(TEXTURE0 + 31); // uploads on a unit no program samples
                         (gl.BindTexture)(tgt, t);
                         (gl.PixelStorei)(UNPACK_ALIGNMENT, 1);
                         let (internal, format, ty, w, h) = (a[2] as GLint, a[3] as GLenum, a[4] as GLenum, a[5] as GLsizei, a[6] as GLsizei);
+
                         if cube {
                             for face in 0..6 {
                                 (gl.TexImage2D)(TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, internal, w, h, 0, format, ty, px);
@@ -182,24 +185,26 @@ impl Player {
                         (gl.TexParameteri)(tgt, TEXTURE_MAG_FILTER, a[8] as GLint);
                         (gl.TexParameteri)(tgt, TEXTURE_WRAP_S, a[9] as GLint);
                         (gl.TexParameteri)(tgt, TEXTURE_WRAP_T, a[10] as GLint);
-                        if a[11] == 1 {
+                        if a[11] & 1 != 0 {
                             (gl.TexParameteri)(tgt, TEXTURE_COMPARE_MODE, COMPARE_REF_TO_TEXTURE);
                             (gl.TexParameteri)(tgt, TEXTURE_COMPARE_FUNC, LEQUAL);
                         }
+                        if a[11] & 2 != 0 {
+                            (gl.GenerateMipmap)(tgt);
+                        }
                         (gl.PixelStorei)(UNPACK_ALIGNMENT, 4);
                         (gl.BindTexture)(tgt, 0);
+                        (gl.ActiveTexture)(TEXTURE0);
                         self.objs.insert(tid, Obj::Texture { tex: t });
                     }
                     4 => {
                         // PASS target, w, h, clear | rgba, depth
                         let (target, pw, ph, clear) = (at(ints, i)?, at(ints, i + 1)?, at(ints, i + 2)?, at(ints, i + 3)?);
                         i += 4;
-                        if target != 0 {
-                            return Err("gpu-gl: render targets are not in the stream yet".into());
-                        }
+                        let fb = self.framebuffer(target)?;
                         let c = fl(f, 5)?;
                         f += 5;
-                        (gl.BindFramebuffer)(FRAMEBUFFER, self.screen_fb);
+                        (gl.BindFramebuffer)(FRAMEBUFFER, fb);
                         (gl.Viewport)(0, 0, pw as GLsizei, ph as GLsizei);
                         (gl.ClearColor)(c[0], c[1], c[2], c[3]);
                         (gl.ClearDepthf)(c[4]);
@@ -351,12 +356,87 @@ impl Player {
                         // RELEASE id
                         let id = at(ints, i)?;
                         i += 1;
-                        match self.objs.remove(&id) {
-                            Some(Obj::Buffer { buf, .. }) => (gl.DeleteBuffers)(1, &buf),
-                            Some(Obj::Texture { tex }) => (gl.DeleteTextures)(1, &tex),
-                            Some(Obj::Program { prog, .. }) => (gl.DeleteProgram)(prog),
-                            None => {}
+                        if let Some(o) = self.objs.remove(&id) {
+                            delete(gl, o);
                         }
+                    }
+                    12 => {
+                        // TARGET id, w, h, samples, colour kind, colour, depth kind, depth
+                        let a = ints.get(i..i + 8).ok_or("gpu-gl: target command cut")?;
+                        i += 8;
+                        if let Some(o) = self.objs.remove(&a[0]) {
+                            delete(gl, o);
+                        }
+                        let (w, h, samples) = (a[1] as GLsizei, a[2] as GLsizei, a[3] as GLsizei);
+                        let mut fb = 0;
+                        let mut rbs = Vec::new();
+                        (gl.GenFramebuffers)(1, &mut fb);
+                        (gl.BindFramebuffer)(FRAMEBUFFER, fb);
+                        for at in 0..2 {
+                            let (kind, v) = (a[4 + at * 2], a[5 + at * 2]);
+                            let point = if at == 0 {
+                                COLOR_ATTACHMENT0
+                            } else if kind == 2 && (v as GLenum == DEPTH24_STENCIL8 || v as GLenum == DEPTH32F_STENCIL8) {
+                                DEPTH_STENCIL_ATTACHMENT
+                            } else {
+                                DEPTH_ATTACHMENT
+                            };
+                            if kind == 1 || kind >= 3 {
+                                let tex = match self.objs.get(&v) {
+                                    Some(Obj::Texture { tex }) => *tex,
+                                    _ => return Err(format!("gpu-gl: id {} is not a texture", v)),
+                                };
+                                let face = if kind >= 3 { TEXTURE_CUBE_MAP_POSITIVE_X + (kind - 3) as GLenum } else { TEXTURE_2D };
+                                (gl.FramebufferTexture2D)(FRAMEBUFFER, point, face, tex, 0);
+                            } else if kind == 2 {
+                                let mut rb = 0;
+                                (gl.GenRenderbuffers)(1, &mut rb);
+                                (gl.BindRenderbuffer)(RENDERBUFFER, rb);
+                                if samples > 0 {
+                                    (gl.RenderbufferStorageMultisample)(RENDERBUFFER, samples, v as GLenum, w, h);
+                                } else {
+                                    (gl.RenderbufferStorage)(RENDERBUFFER, v as GLenum, w, h);
+                                }
+                                (gl.FramebufferRenderbuffer)(FRAMEBUFFER, point, RENDERBUFFER, rb);
+                                rbs.push(rb);
+                            }
+                        }
+                        if a[4] == 0 {
+                            // depth only: GL 3.3 counts a draw buffer without an image as incomplete
+                            (gl.DrawBuffers)(1, &NONE);
+                            (gl.ReadBuffer)(NONE);
+                        }
+                        let status = (gl.CheckFramebufferStatus)(FRAMEBUFFER);
+                        (gl.BindFramebuffer)(FRAMEBUFFER, self.screen_fb);
+                        self.objs.insert(a[0], Obj::Target { fb, rbs });
+                        if status != FRAMEBUFFER_COMPLETE {
+                            return Err(format!("gpu-gl: target {} is incomplete (0x{:x})", a[0], status));
+                        }
+                    }
+                    14 => {
+                        // MIPMAPS texture
+                        let id = at(ints, i)?;
+                        i += 1;
+                        let tex = match self.objs.get(&id) {
+                            Some(Obj::Texture { tex }) => *tex,
+                            _ => return Err(format!("gpu-gl: id {} is not a texture", id)),
+                        };
+                        (gl.ActiveTexture)(TEXTURE0 + 31);
+                        (gl.BindTexture)(TEXTURE_2D, tex);
+                        (gl.GenerateMipmap)(TEXTURE_2D);
+                        (gl.BindTexture)(TEXTURE_2D, 0);
+                        (gl.ActiveTexture)(TEXTURE0);
+                    }
+                    13 => {
+                        // COPY source, destination, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter
+                        let a = ints.get(i..i + 12).ok_or("gpu-gl: copy command cut")?;
+                        i += 12;
+                        let (src, dst) = (self.framebuffer(a[0])?, self.framebuffer(a[1])?);
+                        (gl.BindFramebuffer)(READ_FRAMEBUFFER, src);
+                        (gl.BindFramebuffer)(DRAW_FRAMEBUFFER, dst);
+                        let r: Vec<GLint> = a[2..10].iter().map(|&v| v as GLint).collect();
+                        (gl.BlitFramebuffer)(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], a[10] as GLbitfield, a[11] as GLenum);
+                        (gl.BindFramebuffer)(FRAMEBUFFER, self.screen_fb);
                     }
                     _ => return Err(format!("gpu-gl: unknown command {} at {}", op, i - 1)),
                 }
@@ -366,6 +446,38 @@ impl Player {
             return Err(format!("gpu-gl: {} floats left over", floats.len() - f));
         }
         Ok(())
+    }
+
+    /// A texture's level 0 as RGBA floats, rows bottom first (for tests and tools).
+    pub fn read_texture(&self, id: i64, w: i32, h: i32) -> Result<Vec<f32>, String> {
+        let tex = match self.objs.get(&id) {
+            Some(Obj::Texture { tex }) => *tex,
+            _ => return Err(format!("gpu-gl: id {} is not a texture", id)),
+        };
+        let gl = &self.gl;
+        let mut px = vec![0f32; (w * h * 4) as usize];
+        // SAFETY: `px` holds w*h RGBA floats; the framebuffer is made and deleted here.
+        unsafe {
+            let mut fb = 0;
+            (gl.GenFramebuffers)(1, &mut fb);
+            (gl.BindFramebuffer)(FRAMEBUFFER, fb);
+            (gl.FramebufferTexture2D)(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, tex, 0);
+            (gl.ReadPixels)(0, 0, w, h, RGBA, FLOAT, px.as_mut_ptr() as *mut c_void);
+            (gl.BindFramebuffer)(FRAMEBUFFER, self.screen_fb);
+            (gl.DeleteFramebuffers)(1, &fb);
+        }
+        Ok(px)
+    }
+
+    /// The framebuffer of target `id` (0: the host's).
+    fn framebuffer(&self, id: i64) -> Result<GLuint, String> {
+        if id == 0 {
+            return Ok(self.screen_fb);
+        }
+        match self.objs.get(&id) {
+            Some(Obj::Target { fb, .. }) => Ok(*fb),
+            _ => Err(format!("gpu-gl: id {} is not a target", id)),
+        }
     }
 
     /// The crate's shaders are GLSL ES 3.00; desktop core GL takes them as GLSL 3.30.
@@ -384,11 +496,21 @@ impl Drop for Player {
         // SAFETY: the player's context is expected to still be current when it is dropped.
         unsafe {
             for (_, o) in self.objs.drain() {
-                match o {
-                    Obj::Buffer { buf, .. } => (gl.DeleteBuffers)(1, &buf),
-                    Obj::Texture { tex } => (gl.DeleteTextures)(1, &tex),
-                    Obj::Program { prog, .. } => (gl.DeleteProgram)(prog),
-                }
+                delete(gl, o);
+            }
+        }
+    }
+}
+
+unsafe fn delete(gl: &Gl, o: Obj) {
+    match o {
+        Obj::Buffer { buf, .. } => (gl.DeleteBuffers)(1, &buf),
+        Obj::Texture { tex } => (gl.DeleteTextures)(1, &tex),
+        Obj::Program { prog, .. } => (gl.DeleteProgram)(prog),
+        Obj::Target { fb, rbs } => {
+            (gl.DeleteFramebuffers)(1, &fb);
+            if !rbs.is_empty() {
+                (gl.DeleteRenderbuffers)(rbs.len() as GLsizei, rbs.as_ptr());
             }
         }
     }

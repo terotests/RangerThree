@@ -27,7 +27,7 @@
 //! |---|---|---|---|
 //! | 1 | BUFFER | id, kind (0 f32 vertex data, 1 u32 index), dynamic, n | kind 0: n values (kind 1: n ints follow in `ints`) |
 //! | 2 | PROGRAM | id, vs text, fs text, uniform count, then that many name texts | |
-//! | 3 | TEXTURE | id, cube, internal format, format, type, w, h, min filter, mag filter, wrap s, wrap t, compare (0/1), data (0 none, 1 floats, 2 bytes), offset, n | data 1: n values |
+//! | 3 | TEXTURE | id, cube, internal format, format, type, w, h, min filter, mag filter, wrap s, wrap t, flags (1 depth compare, 2 make mipmaps), data (0 none, 1 floats, 2 bytes), offset, n | data 1: n values; data 2: n bytes at offset in `bytes`, rows bottom first |
 //! | 4 | PASS | target (0 the screen), w, h, clear (bit 1 colour, 2 depth) | r, g, b, a, depth |
 //! | 5 | USE | program id | |
 //! | 6 | UNIFORM | location (index in the program's names), kind, count | kind 1 f, 2 vec2, 3 vec3, 4 vec4, 5 mat3, 6 mat4: count values each that size; kind 7 int: count ints follow in `ints` |
@@ -36,6 +36,12 @@
 //! | 9 | DRAW | mode (GL), first, count, instances (0 none), index buffer (0 none) | |
 //! | 10 | BIND | unit, texture id (0 none), cube | |
 //! | 11 | RELEASE | id | |
+//! | 12 | TARGET | id, w, h, samples, colour (0 none, 1 texture, 2 renderbuffer, 3 + f face f of a cube texture), colour texture id or internal format, depth (same), depth texture id or internal format | |
+//! | 13 | COPY | source target, destination target, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask (GL bits), filter (GL) | |
+//! | 14 | MIPMAPS | texture id (2D): its mipmaps made from level 0 | |
+//!
+//! An executor uploads textures and makes mipmaps on texture unit 31,
+//! which no program samples, so the units the stream bound stay as they are.
 //!
 //! The stream's shape follows WebGPU where that costs nothing (ids from the
 //! writer, programs made once and used by id, state set as one block, passes
@@ -56,6 +62,9 @@ pub const OP_ATTRIB: i64 = 8;
 pub const OP_DRAW: i64 = 9;
 pub const OP_BIND: i64 = 10;
 pub const OP_RELEASE: i64 = 11;
+pub const OP_TARGET: i64 = 12;
+pub const OP_COPY: i64 = 13;
+pub const OP_MIPMAPS: i64 = 14;
 
 pub const U_FLOAT: i64 = 1;
 pub const U_VEC2: i64 = 2;
@@ -141,7 +150,7 @@ impl GpuCommands {
     }
 
     /// A texture; `params` = cube, internal format, format, type, w, h, min
-    /// filter, mag filter, wrap s, wrap t, compare. `data` float texels (may be
+    /// filter, mag filter, wrap s, wrap t, flags (1 depth compare, 2 make mipmaps). `data` float texels (may be
     /// empty: storage only).
     pub fn texture(&mut self, id: i64, params: &Vec<i64>, data: &Vec<f64>) {
         self.op(OP_TEXTURE);
@@ -281,6 +290,43 @@ impl GpuCommands {
         self.op(OP_RELEASE);
         self.ints.push(id);
     }
+
+    /// A render target of `w` x `h`: its colour and depth attachments are
+    /// each none (kind 0), a texture made by TEXTURE (kind 1, `colour` /
+    /// `depth` its id; kind 3 + f: face f of a cube texture) or a
+    /// renderbuffer (kind 2, the value its GL internal format),
+    /// multisampled with `samples` > 0. Without colour it draws depth only.
+    #[allow(clippy::too_many_arguments)]
+    pub fn target(&mut self, id: i64, w: i64, h: i64, samples: i64, colour_kind: i64, colour: i64, depth_kind: i64, depth: i64) {
+        self.op(OP_TARGET);
+        self.ints.push(id);
+        self.ints.push(w);
+        self.ints.push(h);
+        self.ints.push(samples);
+        self.ints.push(colour_kind);
+        self.ints.push(colour);
+        self.ints.push(depth_kind);
+        self.ints.push(depth);
+    }
+
+    /// Makes a 2D texture's mipmaps from its level 0.
+    pub fn mipmaps(&mut self, texture: i64) {
+        self.op(OP_MIPMAPS);
+        self.ints.push(texture);
+    }
+
+    /// Copies a rectangle of target `src` into target `dst` (blitFramebuffer:
+    /// `r` = sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1).
+    pub fn copy(&mut self, src: i64, dst: i64, r: &Vec<i64>, mask: i64, filter: i64) {
+        self.op(OP_COPY);
+        self.ints.push(src);
+        self.ints.push(dst);
+        for v in r.iter() {
+            self.ints.push(*v);
+        }
+        self.ints.push(mask);
+        self.ints.push(filter);
+    }
 }
 
 /// The number of ints each opcode takes after itself, before its variable
@@ -307,6 +353,12 @@ pub fn fixed_ints(op: i64) -> i64 {
     } else if op == OP_BIND {
         3
     } else if op == OP_RELEASE {
+        1
+    } else if op == OP_TARGET {
+        8
+    } else if op == OP_COPY {
+        12
+    } else if op == OP_MIPMAPS {
         1
     } else {
         -1
@@ -398,12 +450,15 @@ mod tests {
         c.uniform_int(1, 7);
         c.state(&vec![0, 32774, 32774, 1, 0, 1, 0, 1, 515, 1, 1, 1, 1, 0], &vec![0.0; 6]);
         c.attrib(0, 1, 3, 12, 0, 0, &vec![0.0; 4]);
+        c.target(6, 4, 4, 0, 1, 4, 2, 35056);
+        c.copy(6, 0, &vec![0, 0, 4, 4, 0, 0, 4, 4], 16384, 9728);
+        c.mipmaps(4);
         c.attrib(1, 0, 3, 0, 0, 0, &vec![0.0, 0.0, 1.0, 0.0]);
         c.bind(2, 4, false);
         c.draw(4, 0, 3, 0, 2);
         c.release(1);
-        assert_eq!(check_stream(&c), 15);
-        assert_eq!(c.count, 15);
+        assert_eq!(check_stream(&c), 18);
+        assert_eq!(c.count, 18);
         assert_eq!(c.texts.len(), 4);
         assert_eq!(c.bytes.len(), 4);
         c.floats.push(0.0);
