@@ -1,0 +1,23 @@
+# OpenGL ES 3 / OpenGL 3.3 player for RangerThree's GPU command stream
+# (three/src/renderers/gpu.rs). A host (SDL3 window, Android/iOS app,
+# M-Files' window) makes the GL context and hands over GL's entry points;
+# the player keeps the GPU objects and runs each frame's commands. No
+# external crates: GL is reached through the host's GetProcAddress, and
+# the headless EGL context used by the examples and tests is opened with
+# dlopen.
+#
+#   cargo run --release --example replay -- ../tmp/gpu-dump   (after tests/gpu-compare.mjs --dump=tmp/gpu-dump)
+#   cargo run --release --example scenes
+
+[package]
+name = "gpu-gl"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+rangerthree = { path = "../three" }
