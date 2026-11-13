@@ -35,6 +35,10 @@ pub struct DrawItem {
     /// the object's renderOrder, and that of the nearest group above it
     pub render_order: f64,
     pub group_order: f64,
+    /// the id of the object's (first) material, and 2 for an instanced mesh: opaque draws
+    /// are grouped by them so draws that share a program and its values follow each other
+    pub material_id: i64,
+    pub variant: i64,
 }
 
 #[derive(Clone)]
@@ -87,8 +91,10 @@ fn group_order(o: &ObjectRef) -> f64 {
     0.0
 }
 
-/// whether `a` is drawn after `b`: opaque by group order then render order
-/// (otherwise in scene order), transparent also farthest first
+/// whether `a` is drawn after `b` (three.js's painterSortStable and
+/// reversePainterSortStable): by group order, then render order; opaque then
+/// by material and instancing, nearest first; transparent farthest first;
+/// otherwise in scene order
 fn after(a: &DrawItem, b: &DrawItem, transparent: bool) -> bool {
     if a.group_order != b.group_order {
         return a.group_order > b.group_order;
@@ -96,7 +102,16 @@ fn after(a: &DrawItem, b: &DrawItem, transparent: bool) -> bool {
     if a.render_order != b.render_order {
         return a.render_order > b.render_order;
     }
-    transparent && a.depth > b.depth
+    if transparent {
+        return a.depth > b.depth;
+    }
+    if a.material_id != b.material_id {
+        return a.material_id > b.material_id;
+    }
+    if a.variant != b.variant {
+        return a.variant > b.variant;
+    }
+    a.depth < b.depth
 }
 
 fn visible_chain(o: &ObjectRef) -> bool {
@@ -189,17 +204,20 @@ pub fn plan_frame(scene: &ObjectRef, camera: &ObjectRef, clear_color: &Color, cl
         }
         let mut is_transparent = false;
         let mut has_material = false;
+        let mut material_id: i64 = 0;
         if let Some(d) = o.borrow().mesh_data() {
             if !d.materials.is_empty() {
                 let m = d.materials[0].borrow();
                 has_material = m.visible;
                 is_transparent = m.transparent;
+                material_id = m.id;
             }
         }
         if let ObjectKind::Sprite(sd) = &o.borrow().kind {
             let m = sd.material.borrow();
             has_material = m.visible;
             is_transparent = m.transparent;
+            material_id = m.id;
         }
         if !has_material {
             continue;
@@ -207,7 +225,8 @@ pub fn plan_frame(scene: &ObjectRef, camera: &ObjectRef, clear_color: &Color, cl
         let mut p = o.borrow().world_position();
         p.apply_matrix4(&view);
         let render_order = o.borrow().render_order;
-        let item = DrawItem { object: o.clone(), kind, transparent: is_transparent, depth: p.z, render_order, group_order: group_order(o) };
+        let variant: i64 = if kind == 2 { 2 } else { 0 };
+        let item = DrawItem { object: o.clone(), kind, transparent: is_transparent, depth: p.z, render_order, group_order: group_order(o), material_id, variant };
         if is_transparent {
             transparent.push(item);
         } else {
