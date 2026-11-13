@@ -37,7 +37,7 @@ use crate::renderers::ltc_table::{ltc_1, ltc_2};
 use crate::renderers::gpu::{GpuCommands, U_FLOAT, U_MAT3, U_MAT4, U_VEC2, U_VEC3, U_VEC4};
 use crate::renderers::gpu_shader::{includes, shader_sources, uniform_declarations, CUSTOM_ATTRIB_BASE, MAX_ATTRIBS};
 use crate::renderers::plan::{material_uniforms, map_transform, plan_frame, program_key, shadow_plans, DrawItem, RenderPlan, VariantInputs, LIGHT_STRIDE};
-use crate::renderers::shaders::{background_fs, full_vs, key_names, main_fragment, main_vertex, pmrem_fs, uniform_names, vsm_blur_fs, MAX_LIGHTS};
+use crate::renderers::shaders::{background_fs, frame_block_names, frame_block_offsets, full_vs, key_names, main_fragment, main_vertex, pmrem_fs, uniform_names, vsm_blur_fs, FRAME_BINDING, MAX_LIGHTS};
 use crate::core::object3d::visible_descendants;
 use crate::maths::color::ColorSpace;
 use crate::maths::euler::{Euler, EulerOrder};
@@ -280,6 +280,8 @@ pub struct GpuRenderer {
     env_vals: Vec<f64>,
     /// the frame uniforms' version: programs that saw an older one get them again
     fver: i64,
+    /// the `fver` the Frame block was last packed at
+    block_ver: i64,
     /// shadow map type of the frame's programs (1 PCF, 2 basic, 3 VSM) and the pass being drawn (0: the screen)
     stype: i64,
     shadow_pass: i64,
@@ -317,6 +319,9 @@ pub struct GpuRenderer {
     light_counts: Vec<i64>,
     fog_kind: i64,
     frame_floats: Vec<f64>,
+    /// the `Frame` block last uploaded, and its buffer
+    frame_block: Vec<f64>,
+    ubo: i64,
     frame_ints: Vec<i64>,
 }
 
@@ -502,6 +507,7 @@ impl GpuRenderer {
             scene_env_rotation: Euler::new(0.0, 0.0, 0.0, EulerOrder::Xyz),
             env_vals: Vec::new(),
             fver: 0,
+            block_ver: -1,
             stype: 1,
             shadow_pass: 0,
             has_shadows: false,
@@ -529,6 +535,8 @@ impl GpuRenderer {
             light_counts: vec![0, 0, 0, 0, 0, 0],
             fog_kind: 0,
             frame_floats: Vec::new(),
+            frame_block: Vec::new(),
+            ubo: 0,
             frame_ints: Vec::new(),
         }
     }
@@ -603,8 +611,9 @@ impl GpuRenderer {
         } else {
             c.use_program(id);
         }
-        if seen != self.fver {
+        if seen != self.fver || self.block_ver != self.fver {
             self.frame_uniforms(c);
+            self.block_ver = self.fver;
         }
         self.programs.insert(key, ProgramEntry { id, frame: self.fver });
     }
@@ -1183,38 +1192,70 @@ impl GpuRenderer {
         }
     }
 
-    /// The frame's uniforms, recorded in `frame_floats` / `frame_ints` by `render`.
-    fn frame_uniforms(&self, c: &mut GpuCommands) {
-        let f = &self.frame_floats;
-        let mut v: Vec<f64> = Vec::new();
-        for i in 0..16 {
-            v.push(f[i]);
+    /// The frame's uniforms (recorded in `frame_floats` / `frame_ints` by
+    /// `render` and the passes) as the `Frame` uniform block, uploaded and
+    /// bound when they changed since the last upload.
+    fn frame_uniforms(&mut self, c: &mut GpuCommands) {
+        let names = frame_block_names();
+        let at = frame_block_offsets();
+        let size = at[names.len()] as usize;
+        let mut b: Vec<f64> = vec![0.0; size];
+        let f = self.frame_floats.clone();
+        for i in 0..48 {
+            b[i] = f[i];
         }
-        c.uniform(self.loc("u_view"), U_MAT4, &v);
-        v = Vec::new();
-        for i in 16..32 {
-            v.push(f[i]);
+        b[48] = f[48];
+        b[49] = f[49];
+        b[50] = f[50];
+        b[51] = f[60];
+        for i in 0..8 {
+            b[52 + i] = f[51 + i];
         }
-        c.uniform(self.loc("u_viewInv"), U_MAT4, &v);
-        v = Vec::new();
-        for i in 32..48 {
-            v.push(f[i]);
+        b[60] = f[59];
+        b[61] = self.frame_ints[0] as f64;
+        if self.trans_size.len() >= 2 {
+            b[62] = self.trans_size[0];
+            b[63] = self.trans_size[1];
         }
-        c.uniform(self.loc("u_proj"), U_MAT4, &v);
-        c.uniform(self.loc("u_cam"), U_VEC3, &vec![f[48], f[49], f[50]]);
-        c.uniform(self.loc("u_lights"), U_VEC4, &self.lights);
-        c.uniform_int(self.loc("u_nlights"), self.frame_ints[0]);
-        c.uniform(self.loc("u_fog"), U_VEC4, &vec![f[51], f[52], f[53], f[54], f[55], f[56], f[57], f[58]]);
-        c.uniform(self.loc("u_pointScale"), U_FLOAT, &vec![f[59]]);
-        c.uniform(self.loc("u_exposure"), U_FLOAT, &vec![f[60]]);
-        if !self.trans_size.is_empty() {
-            c.uniform(self.loc("u_transSize"), U_VEC2, &self.trans_size);
+        for i in 0..self.shadow_mat.len() {
+            if 64 + i < 128 {
+                b[64 + i] = self.shadow_mat[i];
+            }
         }
-        if !self.shadow_mat.is_empty() {
-            c.uniform(self.loc("u_shMat"), U_MAT4, &self.shadow_mat);
-            c.uniform(self.loc("u_shParam"), U_VEC4, &self.shadow_param);
-            c.uniform(self.loc("u_shSize"), U_VEC4, &self.shadow_size);
+        for i in 0..self.shadow_param.len() {
+            if 128 + i < 144 {
+                b[128 + i] = self.shadow_param[i];
+            }
         }
+        for i in 0..self.shadow_size.len() {
+            if 144 + i < 160 {
+                b[144 + i] = self.shadow_size[i];
+            }
+        }
+        for i in 0..self.lights.len() {
+            if 160 + i < size {
+                b[160 + i] = self.lights[i];
+            }
+        }
+        // element by element (a Vec comparison is a reference test in some Ranger targets)
+        let mut same = b.len() == self.frame_block.len();
+        if same {
+            for i in 0..size {
+                if b[i] != self.frame_block[i] {
+                    same = false;
+                    break;
+                }
+            }
+        }
+        if same {
+            return;
+        }
+        if self.ubo == 0 {
+            self.ubo = self.id();
+        }
+        c.uniform_buffer(self.ubo, &b);
+        c.ubind(FRAME_BINDING, self.ubo, 0, (size * 4) as i64);
+        self.frame_block = b;
     }
 
     /// The opaque scene (and background) drawn linear and untoned into a
@@ -1537,6 +1578,9 @@ impl GpuRenderer {
         let mut c = GpuCommands::new();
         let mut missing: Vec<String> = Vec::new();
         self.frame += 1;
+        // the Frame block is uploaded and bound once each frame at least (the
+        // context may be shared with another renderer that binds its own)
+        self.frame_block = Vec::new();
         let plan = plan_frame(scene, camera, &s.clear_color, s.clear_alpha);
         let mut override_mat: Option<MaterialRef> = None;
         let mut bg_tex: Option<TextureRef> = None;

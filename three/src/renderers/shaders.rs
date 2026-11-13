@@ -232,8 +232,47 @@ pub fn main_fragment(shadow_type: i64, vals: &Vec<i64>) -> String {
         }
         first += count;
     }
-    head.push_str(&body.replace("//@LIGHTS\n", &loops));
+    head.push_str(&body.replace("//@LIGHTS\n", &loops).replace("//@FRAME\n", &frame_block_glsl()));
     head
+}
+
+/// The per-frame (per-pass) uniform block both main shaders declare, std140,
+/// block binding `FRAME_BINDING`: one buffer upload per pass in place of a
+/// uniform call per program. Every member is a float or float vector, so a
+/// host writes it as one f32 array; `frame_block_layout` gives the offsets.
+pub fn frame_block_glsl() -> String {
+    let mut s = String::from("layout(std140) uniform Frame {\n  mat4 u_view;\n  mat4 u_viewInv;\n  mat4 u_proj;\n  vec3 u_cam;\n  float u_exposure;\n  vec4 u_fog[2];\n  float u_pointScale;\n  float u_nlightsF;\n  vec2 u_transSize;\n  mat4 u_shMat[4];\n  vec4 u_shParam[4];\n  vec4 u_shSize[4];\n  vec4 u_lights[");
+    s.push_str(&(MAX_LIGHTS * 7).to_string());
+    s.push_str("];\n};\n#define u_nlights int(u_nlightsF)\n");
+    s
+}
+
+/// The uniform block binding of `Frame`.
+pub const FRAME_BINDING: i64 = 0;
+
+/// The members of the `Frame` block in order: their names and their offsets
+/// and sizes in floats (std140); the last entry is the block's size.
+pub fn frame_block_names() -> Vec<String> {
+    vec![
+        String::from("u_view"),
+        String::from("u_viewInv"),
+        String::from("u_proj"),
+        String::from("u_cam"),
+        String::from("u_exposure"),
+        String::from("u_fog"),
+        String::from("u_pointScale"),
+        String::from("u_nlights"),
+        String::from("u_transSize"),
+        String::from("u_shMat"),
+        String::from("u_shParam"),
+        String::from("u_shSize"),
+        String::from("u_lights"),
+    ]
+}
+
+/// Offsets (floats) of `frame_block_names`, then the block's size.
+pub fn frame_block_offsets() -> Vec<i64> {
+    vec![0, 16, 32, 48, 51, 52, 60, 61, 62, 64, 128, 144, 160, 160 + MAX_LIGHTS * 28]
 }
 
 /// The main vertex shader of one variant (`vals` as for `main_fragment`; the
@@ -249,7 +288,7 @@ pub fn main_vertex(vals: &Vec<i64>) -> String {
         head.push_str("\n");
     }
     let body = strip_spec_uniforms(&main_vertex_template(), &spec);
-    head.push_str(&body.replace("#version 300 es\n", ""));
+    head.push_str(&body.replace("#version 300 es\n", "").replace("//@FRAME\n", &frame_block_glsl()));
     head
 }
 
@@ -327,14 +366,14 @@ uniform sampler2D u_dispMap;
 uniform int u_hasDisp;
 uniform mat3 u_dispT;
 uniform float u_dispScale, u_dispBias, u_dashScale;
-uniform mat4 u_model, u_view, u_proj;
+uniform mat4 u_model;
+//@FRAME
 uniform mat3 u_uvt;
 uniform int u_instanced;
-uniform float u_pointSize, u_pointScale;
+uniform float u_pointSize;
 uniform int u_sizeAtt;
 uniform int u_sprite;
 uniform mat3 u_normalMat;
-uniform mat4 u_viewInv;
 uniform vec2 u_center;
 uniform float u_rotation;
 out vec3 v_world; out vec3 v_normal; out vec2 v_uv; out vec2 v_uv0; out vec3 v_color; out float v_depth; out float v_lineDist;
@@ -495,8 +534,8 @@ uniform vec4 u_sheen;
 uniform vec4 u_trans;
 uniform vec3 u_attColor;
 uniform sampler2D u_transMap;
-uniform vec2 u_transSize;
-uniform mat4 u_model, u_proj;
+uniform mat4 u_model;
+//@FRAME
 uniform sampler2D u_emap;
 uniform int u_hasEmap;
 uniform sampler2D u_alphaMap, u_roughMap, u_metalMap, u_normalMap, u_aoMap, u_matcap, u_gradMap;
@@ -509,9 +548,6 @@ uniform float u_aoIntensity;
 uniform mat3 u_euvt;
 uniform vec4 u_mat[6];
 uniform sampler2D u_dfg;
-uniform vec4 u_lights["#);
-    s.push_str(&(MAX_LIGHTS * 7).to_string());
-    s.push_str(r#"];
 uniform sampler2D u_ltc;
 #if SHADOW_TYPE == 3
 uniform sampler2D u_sh0, u_sh1, u_sh2;
@@ -520,17 +556,10 @@ uniform samplerCube u_shc0;
 uniform highp sampler2DShadow u_sh0, u_sh1, u_sh2;
 uniform highp samplerCubeShadow u_shc0;
 #endif
-uniform mat4 u_shMat[4];
-uniform vec4 u_shParam[4];
-uniform vec4 u_shSize[4];
 uniform int u_receive;
 uniform sampler2D u_envMap;
 uniform vec4 u_env, u_envUV;
 uniform mat3 u_envRot;
-uniform int u_nlights;
-uniform vec4 u_fog[2];
-uniform vec3 u_cam;
-uniform mat4 u_view;
 uniform mat3 u_uvt;
 uniform sampler2D u_map;
 uniform int u_hasMap;
@@ -538,7 +567,6 @@ uniform int u_points;
 uniform int u_hasNormal;
 uniform int u_opaque;
 uniform int u_tone;
-uniform float u_exposure;
 out vec4 o_color;
 #define TONE_K u_tone
 "#);

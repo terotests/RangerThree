@@ -45,6 +45,13 @@
   }
 
   var NAMES = S.uniform_names();
+  // the Frame uniform block's members: offsets in floats (renderers/shaders.rs)
+  var FRAME_AT = {}, FRAME_FLOATS;
+  (function () {
+    var names = S.frame_block_names(), at = S.frame_block_offsets();
+    for (var i = 0; i < names.length; i++) FRAME_AT[names[i]] = at[i];
+    FRAME_FLOATS = at[names.length];
+  })();
 
   // GL state and uniform values, cached: a call that sets what is already
   // set is skipped. The setters are shadowed on the context object itself, so
@@ -105,6 +112,9 @@
       st.vaos.forEach(function (v) { if (v.elem === x) v.elem = undefined; for (var i = 0; i < v.ptr.length; i++) if (v.ptr[i] && v.ptr[i][0] === x) v.ptr[i] = undefined; });
       raw.deleteBuffer.call(gl, x);
     });
+    // binding a buffer to an indexed target also binds it to the generic one
+    wrap("bindBufferBase", function (t, i, x) { st.buf[t] = x; raw.bindBufferBase.call(gl, t, i, x); });
+    wrap("bindBufferRange", function (t, i, x, o, n) { st.buf[t] = x; raw.bindBufferRange.call(gl, t, i, x, o, n); });
     wrap("bindVertexArray", function (x) { if (st.vao === x) return; st.vao = x; raw.bindVertexArray.call(gl, x); });
     wrap("deleteVertexArray", function (x) { st.vaos.delete(x); if (st.vao === x) st.vao = undefined; raw.deleteVertexArray.call(gl, x); });
     wrap("enableVertexAttribArray", function (i) { var v = vaoState(); if (v.on[i] !== true) { v.on[i] = true; raw.enableVertexAttribArray.call(gl, i); } });
@@ -173,6 +183,13 @@
     gl.getExtension("KHR_parallel_shader_compile");
     this.seenDraws = new WeakMap(); // object -> material key it was last drawn with (prepass)
     this.frame = {};
+    // the Frame uniform block: one buffer at its binding, uploaded when a pass changes it
+    this.fblock = new Float32Array(FRAME_FLOATS);
+    this.fdirty = true;
+    this.ubo = gl.createBuffer();
+    gl.bindBuffer(gl.UNIFORM_BUFFER, this.ubo);
+    gl.bufferData(gl.UNIFORM_BUFFER, FRAME_FLOATS * 4, gl.DYNAMIC_DRAW);
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, S.FRAME_BINDING(), this.ubo);
     this.fver = 0;
     this.cur = null;
     this.buffers = new WeakMap();   // attribute -> { buf, version }
@@ -228,6 +245,11 @@
     }
     // the prepass only starts the compiles
     if (this.prepass) return false;
+    if (this.fdirty) {
+      gl.bindBuffer(gl.UNIFORM_BUFFER, this.ubo);
+      gl.bufferSubData(gl.UNIFORM_BUFFER, 0, this.fblock);
+      this.fdirty = false;
+    }
     if (!m.u) {
       finishProgram(gl, m);
       gl.useProgram(m.prog);
@@ -251,6 +273,14 @@
   // a uniform every variant shares for the whole frame (or pass): recorded,
   // and set on each program when it is next used
   B.frameUniform = function (name, kind, v) {
+    // a member of the Frame uniform block: written into the block, uploaded before the next draw
+    var at = FRAME_AT[name];
+    if (at !== undefined) {
+      if (kind === "i" || kind === "f") this.fblock[at] = v;
+      else this.fblock.set(v, at);
+      this.fdirty = true;
+      return;
+    }
     if (kind !== "i" && kind !== "f") v = Float32Array.from(v);
     this.frame[name] = { kind: kind, v: v, ver: ++this.fver };
     if (this.cur) { setUniform(this.gl, this.cur.u[name], kind, v); this.cur.seen = this.fver; }
@@ -376,6 +406,8 @@
       throw new Error("WebGL2 program: " + log);
     }
     gl.deleteShader(p.vs); gl.deleteShader(p.fs); p.vs = p.fs = null;
+    var bi = gl.getUniformBlockIndex(p.prog, "Frame");
+    if (bi !== 4294967295 && bi !== -1) gl.uniformBlockBinding(p.prog, bi, S.FRAME_BINDING());
     var u = {};
     for (var i = 0; i < p.names.length; i++) u[p.names[i]] = gl.getUniformLocation(p.prog, p.names[i]);
     p.u = u;
@@ -792,6 +824,9 @@
     var plan = R.RenderersPlan.plan_frame(scene, camera, soft.clear_color, soft.clear_alpha);
     this.scene = scene;
     var w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+    // the Frame block's buffer at its binding (the context may be shared with the command player)
+    gl.bindBufferBase(gl.UNIFORM_BUFFER, S.FRAME_BINDING(), this.ubo);
+    this.fdirty = true;
     // shadow type (three.js: 0 basic, 1 PCF, 2 PCF soft = PCF, 3 VSM) -> 2, 1, 3; 0 none
     var sm = r.shadowMap, stype = sm && sm.enabled ? (sm.type === 0 ? 2 : sm.type === 3 ? 3 : 1) : 0;
     this.stype = stype || 1;
