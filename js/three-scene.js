@@ -526,7 +526,16 @@
     }, function (params) { this.setValues(params); });
     F.flag(T[name], "is" + name);
   });
-  accessor(T.Material.prototype, "envMapRotation", function () { if (!this._emr) def(this, "_emr", new T.Euler()); return this._emr; });
+  // an Euler kept in step with a crate Euler field (`set` writes it when the Euler changes)
+  function syncedEuler(self, hidden, set) {
+    if (!self[hidden]) {
+      var e = new T.Euler();
+      e._onChange(function () { set(self, eulerCore(e)); });
+      def(self, hidden, e);
+    }
+    return self[hidden];
+  }
+  accessor(T.Material.prototype, "envMapRotation", function () { return syncedEuler(this, "_emr", function (m, v) { m.env_map_rotation = v; }); });
   (function () {
     var sp = T.ShaderMaterial.prototype;
     ["uniforms", "defines", "vertexShader", "fragmentShader", "lights", "clipping", "glslVersion", "extensions", "uniformsGroups"].forEach(function (k) {
@@ -1028,8 +1037,8 @@
       else d.background = new R.Background_Texture(v);
     });
     accessor(p, "fog", function () { var f = this.kind.f0.fog; return f === undefined ? null : f; }, function (v) { this.kind.f0.fog = v === null ? undefined : v; });
-    accessor(p, "backgroundRotation", function () { if (!this._br) def(this, "_br", new T.Euler()); return this._br; });
-    accessor(p, "environmentRotation", function () { if (!this._er) def(this, "_er", new T.Euler()); return this._er; });
+    accessor(p, "backgroundRotation", function () { return syncedEuler(this, "_br", function (o, v) { o.kind.f0.background_rotation = v; }); });
+    accessor(p, "environmentRotation", function () { return syncedEuler(this, "_er", function (o, v) { o.kind.f0.environment_rotation = v; }); });
     def(p, "toJSONExtra", function (o) {
       if (this.fog) o.fog = this.fog.toJSON();
       if (this.background && this.background.isColor) o.background = this.background.getHex();

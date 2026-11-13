@@ -88,7 +88,7 @@ for (const name of Object.keys(ctx.EXAMPLES)) {
     s.pixel_ratio = renderer._pixelRatio; s.tone_mapping = renderer.toneMapping | 0;
     s.exposure = renderer.toneMappingExposure === undefined ? 1 : renderer.toneMappingExposure;
     s.output_linear = renderer.outputColorSpace === "srgb-linear";
-    s.shadows = !!(renderer.shadowMap && renderer.shadowMap.enabled); s.clear_color = renderer._soft.clear_color; s.clear_alpha = renderer._soft.clear_alpha;
+    s.shadows = !!(renderer.shadowMap && renderer.shadowMap.enabled); s.half_float = !!gl.getExtension("EXT_color_buffer_float"); s.clear_color = renderer._soft.clear_color; s.clear_alpha = renderer._soft.clear_alpha;
     let b, first = null; const pl = [], py = [];
     for (let i = 0; i < frames; i++) {
       const t0 = performance.now();

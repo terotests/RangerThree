@@ -192,6 +192,24 @@ fn main() {
                 println!("FAIL  {}: {}", name, e);
                 continue;
             }
+            // TEXDUMP=id:w:h writes that texture as a float image (debugging the passes)
+            if let Ok(spec) = std::env::var("TEXDUMP") {
+                let p: Vec<i64> = spec.split(':').map(|x| x.parse().unwrap()).collect();
+                match player.read_texture(p[0], p[1] as i32, p[2] as i32) {
+                    Ok(t) => {
+                        let mut out = format!("P6\n{} {}\n255\n", p[1], p[2]).into_bytes();
+                        for y in (0..p[2] as usize).rev() {
+                            for x in 0..p[1] as usize {
+                                for k in 0..3 {
+                                    out.push((t[(y * p[1] as usize + x) * 4 + k].clamp(0.0, 1.0) * 255.0) as u8);
+                                }
+                            }
+                        }
+                        std::fs::write(dir.join(format!("tex{}.{}.ppm", p[0], if desktop { "gl" } else { "es" })), out).unwrap();
+                    }
+                    Err(e) => println!("{}", e),
+                }
+            }
             let got = read_rgba(&player.gl, w, h);
             let ms = t0.elapsed().as_secs_f64() * 1000.0;
             let (mut sum, mut max, mut far) = (0u64, 0u8, 0usize);

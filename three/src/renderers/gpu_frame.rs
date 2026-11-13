@@ -28,9 +28,11 @@ use crate::maths::matrix4::Matrix4;
 use crate::renderers::dfg_table::dfg_table;
 use crate::renderers::gpu::{GpuCommands, U_FLOAT, U_MAT3, U_MAT4, U_VEC2, U_VEC3, U_VEC4};
 use crate::renderers::plan::{material_uniforms, map_transform, plan_frame, shadow_plans, DrawItem, LIGHT_STRIDE};
-use crate::renderers::shaders::{key_names, main_fragment, main_vertex, uniform_names, MAX_LIGHTS};
+use crate::renderers::shaders::{background_fs, full_vs, key_names, main_fragment, main_vertex, pmrem_fs, uniform_names, MAX_LIGHTS};
 use crate::core::object3d::visible_descendants;
 use crate::maths::color::ColorSpace;
+use crate::maths::euler::{Euler, EulerOrder};
+use crate::textures::texture::{EQUIRECTANGULAR_REFLECTION_MAPPING, EQUIRECTANGULAR_REFRACTION_MAPPING};
 use crate::textures::texture::TextureRef;
 
 // GL constants the stream carries
@@ -65,6 +67,9 @@ pub struct GpuSettings {
     pub clear_alpha: f64,
     /// shadowMap.enabled
     pub shadows: bool,
+    /// half-float textures can be drawn into (WebGL2: EXT_color_buffer_float);
+    /// the prefiltered environment is kept in RGBA16F then, else RGBA8
+    pub half_float: bool,
 }
 
 impl GpuSettings {
@@ -79,6 +84,7 @@ impl GpuSettings {
             clear_color: Color::new(0.0, 0.0, 0.0),
             clear_alpha: 1.0,
             shadows: false,
+            half_float: false,
         }
     }
 }
@@ -109,6 +115,29 @@ struct TextureEntry {
     key: String,
 }
 
+/// A prefiltered environment (three.js's PMREM) of an equirectangular
+/// texture: the levels (each a 3 x 2 atlas of cube faces) and all of them
+/// in one CubeUV atlas.
+#[derive(Clone)]
+struct EnvEntry {
+    version: i64,
+    levels: Vec<i64>,
+    sizes: Vec<i64>,
+    lod_max: i64,
+    atlas: i64,
+    aw: i64,
+    ah: i64,
+}
+
+/// The environment a draw uses: its texture, whether it is prefiltered
+/// (standard and physical materials) and whether it is the scene's.
+#[derive(Clone)]
+struct EnvUse {
+    tex: TextureRef,
+    pbr: bool,
+    scene: bool,
+}
+
 /// Pixels the host handed over for a texture.
 #[derive(Clone)]
 struct HostImage {
@@ -137,6 +166,15 @@ pub struct GpuRenderer {
     images: Map<i64, HostImage>,
     /// the extra maps' uv transforms, 6 mat3 (u_t)
     map_t: Vec<f64>,
+    envs: Map<i64, EnvEntry>,
+    pm_prog: i64,
+    bg_prog: i64,
+    /// the scene being drawn's environment, its intensity and rotation, the tone mapping
+    scene_env: Option<TextureRef>,
+    scene_env_intensity: f64,
+    scene_env_rotation: Euler,
+    /// u_envUV, u_env and u_envRot of the draw's environment (env_bind)
+    env_vals: Vec<f64>,
     names: Vec<String>,
     dfg: i64,
     shadow_flat: i64,
@@ -206,9 +244,10 @@ fn clamp01(x: f64) -> f64 {
 
 /// The textures `m` samples (the command renderer draws none yet).
 /// The maps the main program samples (`material_map` k), in this order: map, emissive map,
-/// then the extra maps of `EXTRA_MAPS`, then the displacement map. Light
-/// and specular maps are not drawn by the WebGL2 backend either.
-const MAP_COUNT: i64 = 11;
+/// then the extra maps (`EXTRA_UNITS`), the displacement map and the
+/// environment map. Light and specular maps are not drawn by the WebGL2
+/// backend either.
+const MAP_COUNT: i64 = 12;
 
 /// Ids this renderer gives start here, far above the JS facade's counters.
 const AUTO_ID_BASE: i64 = 1000000000000;
@@ -226,6 +265,7 @@ fn material_map(m: &Material, k: i64) -> Option<TextureRef> {
         8 => m.gradient_map.clone(),
         9 => m.bump_map.clone(),
         10 => m.displacement_map.clone(),
+        11 => m.env_map.clone(),
         _ => None,
     }
 }
@@ -268,6 +308,38 @@ fn gl_filter(f: i64) -> i64 {
     }
 }
 
+/// three.js's roughnessToMip: roughness -> level of the prefiltered environment.
+fn roughness_to_mip(r: f64) -> f64 {
+    if r >= 0.8 {
+        (1.0 - r) * (-1.0 + 2.0) / 0.2 - 2.0
+    } else if r >= 0.4 {
+        (0.8 - r) * (2.0 + 1.0) / 0.4 - 1.0
+    } else if r >= 0.305 {
+        (0.4 - r) * (3.0 - 2.0) / (0.4 - 0.305) + 2.0
+    } else if r >= 0.21 {
+        (0.305 - r) * (4.0 - 3.0) / (0.305 - 0.21) + 3.0
+    } else {
+        -2.0 * (1.16 * r).log2()
+    }
+}
+
+fn is_equirect(t: &TextureRef) -> bool {
+    let m = t.borrow().mapping;
+    m == EQUIRECTANGULAR_REFLECTION_MAPPING || m == EQUIRECTANGULAR_REFRACTION_MAPPING
+}
+
+/// The rotation matrix of an Euler as its 3x3 (column-major), or transposed.
+fn euler_mat3(e: &Euler, transposed: bool) -> Vec<f64> {
+    let mut m = Matrix4::identity();
+    m.make_rotation_from_euler(e);
+    let x = m.elements;
+    if transposed {
+        vec![x[0], x[4], x[8], x[1], x[5], x[9], x[2], x[6], x[10]]
+    } else {
+        vec![x[0], x[1], x[2], x[4], x[5], x[6], x[8], x[9], x[10]]
+    }
+}
+
 fn gl_wrap(w: i64) -> i64 {
     if w == 1000 {
         10497
@@ -289,6 +361,13 @@ impl GpuRenderer {
             auto_id: AUTO_ID_BASE,
             images: Map::new(),
             map_t: vec![0.0; 54],
+            envs: Map::new(),
+            pm_prog: 0,
+            bg_prog: 0,
+            scene_env: None,
+            scene_env_intensity: 1.0,
+            scene_env_rotation: Euler::new(0.0, 0.0, 0.0, EulerOrder::Xyz),
+            env_vals: Vec::new(),
             names: uniform_names(),
             dfg: 0,
             shadow_flat: 0,
@@ -378,7 +457,6 @@ impl GpuRenderer {
         self.programs.insert(key, ProgramEntry { id, frame: self.frame });
     }
 
-    /// The samplers' texture units (as three-webgl.js setUnits).
     /// Hands over a texture's pixels: RGBA8, `width` x `height`, rows from the top.
     pub fn set_texture_image(&mut self, texture_id: i64, version: i64, width: i64, height: i64, data: Vec<u8>) {
         self.images.insert(texture_id, HostImage { version, width, height, data });
@@ -405,11 +483,31 @@ impl GpuRenderer {
         }
     }
 
+    /// The scene's background and environment textures.
+    fn scene_textures(&self, scene: &ObjectRef) -> Vec<TextureRef> {
+        let mut out: Vec<TextureRef> = Vec::new();
+        if let ObjectKind::Scene(sd) = &scene.borrow().kind {
+            if let Background::Texture(t) = &sd.background {
+                out.push(t.clone());
+            }
+            if let Some(t) = &sd.environment {
+                out.push(t.clone());
+            }
+        }
+        out
+    }
+
     /// Gives an id to every object, geometry and map texture under `scene`
     /// that has none (0), since the caches key on them. The JS facade
     /// numbers its own as three.js does; objects made in Rust start at 0,
     /// so Rust hosts call this (through `upload_images`) before `render`.
     pub fn assign_ids(&mut self, scene: &ObjectRef) {
+        for t in self.scene_textures(scene).iter() {
+            if t.borrow().id == 0 {
+                t.borrow_mut().id = self.auto_id;
+                self.auto_id += 1;
+            }
+        }
         for o in visible_descendants(scene).iter() {
             if o.borrow().id == 0 {
                 o.borrow_mut().id = self.auto_id;
@@ -449,6 +547,13 @@ impl GpuRenderer {
     pub fn textures_to_upload(&self, scene: &ObjectRef) -> Vec<TextureRef> {
         let mut out: Vec<TextureRef> = Vec::new();
         let mut seen: Vec<i64> = Vec::new();
+        for t in self.scene_textures(scene).iter() {
+            let id = t.borrow().id;
+            seen.push(id);
+            if self.texture_image_version(id) != t.borrow().version {
+                out.push(t.clone());
+            }
+        }
         for o in visible_descendants(scene).iter() {
             let ob = o.borrow();
             let data = match &ob.kind {
@@ -491,6 +596,351 @@ impl GpuRenderer {
                 self.set_texture_image(tb.id, tb.version, img.width, img.height, img.data.clone());
             }
         }
+    }
+
+    /// Full-screen passes: no attributes (the programs use gl_VertexID), no
+    /// blending, depth or culling.
+    fn fullscreen_state(&self, c: &mut GpuCommands) {
+        for loc in 0..10 {
+            c.attrib(loc, 0, 4, 0, 0, 0, &vec![0.0, 0.0, 0.0, 1.0]);
+        }
+        c.state(&vec![0, GL_FUNC_ADD, GL_FUNC_ADD, GL_ONE, GL_ZERO, GL_ONE, GL_ZERO, 0, GL_LEQUAL, 0, 0, 1, 1, 0], &vec![0.0; 6]);
+    }
+
+    /// The environment material `m` uses (three-webgl.js envOf).
+    fn env_of(&self, m: &Material) -> Option<EnvUse> {
+        let pbr = m.kind == MaterialKind::MeshStandard || m.kind == MaterialKind::MeshPhysical;
+        let lp = m.kind == MaterialKind::MeshLambert || m.kind == MaterialKind::MeshPhong;
+        if !pbr && !lp && m.kind != MaterialKind::MeshBasic {
+            return None;
+        }
+        let mut tex: Option<TextureRef> = None;
+        let mut scene = false;
+        if let Some(t) = &m.env_map {
+            tex = Some(t.clone());
+        } else if pbr || lp {
+            if let Some(t) = &self.scene_env {
+                tex = Some(t.clone());
+                scene = true;
+            }
+        }
+        match tex {
+            Some(t) => {
+                if !is_equirect(&t) || self.texture_image_version(t.borrow().id) < 0 {
+                    return None;
+                }
+                Some(EnvUse { tex: t, pbr, scene })
+            }
+            None => None,
+        }
+    }
+
+    /// The prefiltered levels of an equirectangular texture, made when its
+    /// version changes (three-webgl.js pmrem); false when its pixels are not here.
+    fn pmrem(&mut self, c: &mut GpuCommands, t: &TextureRef, half_float: bool) -> bool {
+        let tid = t.borrow().id;
+        let version = t.borrow().version;
+        let mut width: i64 = 0;
+        if let Some(im) = self.images.get(&tid) {
+            width = im.width;
+        }
+        if width <= 0 {
+            return false;
+        }
+        let mut stale: Vec<i64> = Vec::new();
+        if let Some(e) = self.envs.get(&tid) {
+            if e.version == version {
+                return true;
+            }
+            for l in e.levels.iter() {
+                stale.push(*l);
+            }
+            stale.push(e.atlas);
+        }
+        for id in stale.iter() {
+            c.release(*id);
+        }
+        if self.pm_prog == 0 {
+            self.pm_prog = self.id();
+            let names: Vec<String> = vec![
+                String::from("u_src"),
+                String::from("u_pass"),
+                String::from("u_size"),
+                String::from("u_sizeIn"),
+                String::from("u_rough"),
+            ];
+            c.program(self.pm_prog, &full_vs(), &pmrem_fs(), &names);
+        }
+        let lod_max = ((width as f64) / 4.0).log2().floor() as i64;
+        let cube: i64 = 1 << lod_max;
+        let n = lod_max - 4 + 1 + 6;
+        let mut sizes: Vec<i64> = Vec::new();
+        for i in 0..n {
+            sizes.push(if i > lod_max - 4 { 16 } else { 1 << (lod_max - i) });
+        }
+        let internal = if half_float { 34842 } else { 32856 };
+        let ty = if half_float { 5131 } else { 5121 };
+        c.use_program(self.pm_prog);
+        self.fullscreen_state(c);
+        c.uniform_int(0, 0);
+        // level 0: the equirect texture as cube faces
+        let mut levels: Vec<i64> = Vec::new();
+        let mut level_targets: Vec<i64> = Vec::new();
+        let l0 = self.id();
+        c.texture(l0, &vec![0, internal, 6408, ty, 3 * cube, 2 * cube, GL_LINEAR, GL_LINEAR, GL_CLAMP, GL_CLAMP, 0], &Vec::new());
+        let t0 = self.id();
+        c.target(t0, 3 * cube, 2 * cube, 0, 1, l0, 0, 0);
+        levels.push(l0);
+        level_targets.push(t0);
+        c.pass(t0, 3 * cube, 2 * cube, 0, &vec![0.0, 0.0, 0.0, 0.0], 1.0);
+        self.texture(c, t, 0);
+        self.pm_pass(c, 0, cube, 0, 0.0);
+        // each level filters the one before it with the extra roughness between them (three.js's _applyGGXFilter)
+        for k in 1..n {
+            let target = (k as f64) / ((n - 1) as f64);
+            let source = ((k - 1) as f64) / ((n - 1) as f64);
+            let rough = (target * target - source * source).sqrt() * (target * 1.25);
+            let sz = sizes[k as usize];
+            let tmp = self.id();
+            c.texture(tmp, &vec![0, internal, 6408, ty, 3 * sz, 2 * sz, GL_LINEAR, GL_LINEAR, GL_CLAMP, GL_CLAMP, 0], &Vec::new());
+            let tmp_t = self.id();
+            c.target(tmp_t, 3 * sz, 2 * sz, 0, 1, tmp, 0, 0);
+            c.pass(tmp_t, 3 * sz, 2 * sz, 0, &vec![0.0, 0.0, 0.0, 0.0], 1.0);
+            c.bind(0, levels[(k - 1) as usize], false);
+            self.pm_pass(c, 1, sz, sizes[(k - 1) as usize], rough);
+            let lv = self.id();
+            c.texture(lv, &vec![0, internal, 6408, ty, 3 * sz, 2 * sz, GL_LINEAR, GL_LINEAR, GL_CLAMP, GL_CLAMP, 0], &Vec::new());
+            let lv_t = self.id();
+            c.target(lv_t, 3 * sz, 2 * sz, 0, 1, lv, 0, 0);
+            c.pass(lv_t, 3 * sz, 2 * sz, 0, &vec![0.0, 0.0, 0.0, 0.0], 1.0);
+            c.bind(0, tmp, false);
+            self.pm_pass(c, 1, sz, sz, 0.0);
+            c.release(tmp_t);
+            c.release(tmp);
+            levels.push(lv);
+            level_targets.push(lv_t);
+        }
+        // every level in one texture laid out as three.js's CubeUV map: the levels down to 16 texels in a
+        // column, the rougher 16-texel levels in a row beside the last one
+        let aw = 3 * (if cube > 112 { cube } else { 112 });
+        let ah = 4 * cube;
+        let atlas = self.id();
+        c.texture(atlas, &vec![0, internal, 6408, ty, aw, ah, GL_LINEAR, GL_LINEAR, GL_CLAMP, GL_CLAMP, 0], &Vec::new());
+        let atlas_t = self.id();
+        c.target(atlas_t, aw, ah, 0, 1, atlas, 0, 0);
+        for q in 0..n {
+            let sz = sizes[q as usize];
+            let m = lod_max - q;
+            let ax = if m >= 4 { 0 } else { (4 - m) * 48 };
+            let ay = 4 * (cube - (if sz > 16 { sz } else { 16 }));
+            c.copy(level_targets[q as usize], atlas_t, &vec![0, 0, 3 * sz, 2 * sz, ax, ay, ax + 3 * sz, ay + 2 * sz], 16384, 9728);
+        }
+        for lt in level_targets.iter() {
+            c.release(*lt);
+        }
+        c.release(atlas_t);
+        self.envs.insert(tid, EnvEntry { version, levels, sizes, lod_max, atlas, aw, ah });
+        true
+    }
+
+    fn pm_pass(&self, c: &mut GpuCommands, kind: i64, size: i64, size_in: i64, rough: f64) {
+        c.uniform_int(1, kind);
+        c.uniform(2, U_FLOAT, &vec![size as f64]);
+        c.uniform(3, U_FLOAT, &vec![size_in as f64]);
+        c.uniform(4, U_FLOAT, &vec![rough]);
+        c.draw(GL_TRIANGLES, 0, 3, 0, 0);
+    }
+
+    /// The prefiltered environments the frame's materials use, made before the screen pass.
+    fn prepare_envs(&mut self, c: &mut GpuCommands, items: &Vec<DrawItem>, half_float: bool) {
+        let mut seen: Vec<i64> = Vec::new();
+        for it in items.iter() {
+            let ob = it.object.borrow();
+            let mut mats: Vec<MaterialRef> = Vec::new();
+            if let Some(d) = ob.mesh_data() {
+                for m in d.materials.iter() {
+                    mats.push(m.clone());
+                }
+            }
+            for m in mats.iter() {
+                if let Some(e) = self.env_of(&m.borrow()) {
+                    let id = e.tex.borrow().id;
+                    if e.pbr && !seen.contains(&id) {
+                        seen.push(id);
+                        self.pmrem(c, &e.tex, half_float);
+                    }
+                }
+            }
+        }
+    }
+
+    /// scene.background when it is a texture (three-webgl.js background): a
+    /// screen-filling texture, or the world seen through an equirectangular
+    /// map, blurred through the prefiltered levels when backgroundBlurriness > 0.
+    #[allow(clippy::too_many_arguments)]
+    fn background(&mut self, c: &mut GpuCommands, tex: &TextureRef, blur: f64, intensity: f64, rotation: &Euler, view: &Matrix4, projection: &Matrix4, s: &GpuSettings) {
+        let tid = tex.borrow().id;
+        let mut width: i64 = 0;
+        if let Some(im) = self.images.get(&tid) {
+            width = im.width;
+        }
+        if width <= 0 {
+            return;
+        }
+        let equirect = is_equirect(tex);
+        let mut blurred = false;
+        if equirect && blur > 0.0 {
+            blurred = self.pmrem(c, tex, s.half_float);
+        }
+        if self.bg_prog == 0 {
+            self.bg_prog = self.id();
+            let names: Vec<String> = vec![
+                String::from("u_mode"),
+                String::from("u_tone"),
+                String::from("u_linearOut"),
+                String::from("u_exposure"),
+                String::from("u_intensity"),
+                String::from("u_lod"),
+                String::from("u_mipF"),
+                String::from("u_sizeA"),
+                String::from("u_sizeB"),
+                String::from("u_tex"),
+                String::from("u_lvA"),
+                String::from("u_lvB"),
+                String::from("u_uvt"),
+                String::from("u_rot"),
+                String::from("u_view"),
+                String::from("u_proj"),
+                String::from("u_vp"),
+            ];
+            c.program(self.bg_prog, &full_vs(), &background_fs(), &names);
+        }
+        c.use_program(self.bg_prog);
+        self.fullscreen_state(c);
+        c.uniform_int(9, 0);
+        c.uniform_int(10, 15);
+        c.uniform_int(11, 3);
+        c.uniform(16, U_VEC2, &vec![s.width as f64, s.height as f64]);
+        c.uniform(14, U_MAT4, &elements(view));
+        c.uniform(15, U_MAT4, &elements(projection));
+        c.uniform(13, U_MAT3, &euler_mat3(rotation, false));
+        c.uniform(4, U_FLOAT, &vec![intensity]);
+        // three.js tone-maps a background unless its texture is sRGB (the prefiltered levels are linear)
+        let srgb = tex.borrow().color_space == ColorSpace::Srgb;
+        c.uniform_int(1, if srgb && !blurred { 0 } else { s.tone_mapping });
+        c.uniform(3, U_FLOAT, &vec![s.exposure]);
+        c.uniform_int(2, if s.output_linear { 1 } else { 0 });
+        if blurred {
+            let mut lod_max: i64 = 0;
+            let mut levels: Vec<i64> = Vec::new();
+            let mut sizes: Vec<i64> = Vec::new();
+            if let Some(e) = self.envs.get(&tid) {
+                lod_max = e.lod_max;
+                levels = e.levels.clone();
+                sizes = e.sizes.clone();
+            }
+            let mut mip = roughness_to_mip(blur);
+            if mip < -2.0 {
+                mip = -2.0;
+            }
+            if mip > lod_max as f64 {
+                mip = lod_max as f64;
+            }
+            let mi = mip.floor();
+            let mf = mip - mi;
+            let a = lod_max - (mi as i64);
+            let b = if a - 1 > 0 { a - 1 } else { 0 };
+            c.bind(15, levels[a as usize], false);
+            c.bind(3, levels[b as usize], false);
+            c.uniform(7, U_FLOAT, &vec![sizes[a as usize] as f64]);
+            c.uniform(8, U_FLOAT, &vec![sizes[b as usize] as f64]);
+            c.uniform(6, U_FLOAT, &vec![mf]);
+            c.uniform_int(0, 3);
+        } else {
+            if !self.texture(c, tex, 0) {
+                return;
+            }
+            if equirect {
+                // the mip level whose texel is one screen pixel wide (no derivative jump at the seam)
+                let pixel = 2.0 * (1.0 / projection.elements[5].abs()).atan() / (s.height as f64);
+                let mut lod = (pixel / (2.0 * std::f64::consts::PI / (width as f64))).log2();
+                if lod < 0.0 {
+                    lod = 0.0;
+                }
+                c.uniform(5, U_FLOAT, &vec![lod]);
+                c.uniform_int(0, 2);
+            } else {
+                c.uniform(12, U_MAT3, &texture_matrix(tex));
+                c.uniform_int(0, 1);
+            }
+        }
+        c.draw(GL_TRIANGLES, 0, 3, 0, 0);
+    }
+
+    /// Binds a draw's environment on unit 11 and sets u_envUV, u_env and
+    /// u_envRot (three-webgl.js envBind / envUniforms); its mode (1
+    /// prefiltered, 2 equirect) or 0 for none.
+    #[allow(unused_assignments)]
+    fn env_bind(&mut self, c: &mut GpuCommands, m: &Material) -> i64 {
+        let e = match self.env_of(m) {
+            Some(e) => e,
+            None => return 0,
+        };
+        let tid = e.tex.borrow().id;
+        let mut uv: Vec<f64> = Vec::new();
+        let mut env: Vec<f64> = Vec::new();
+        let mut mode: i64 = 0;
+        if e.pbr {
+            let mut found = false;
+            let mut atlas: i64 = 0;
+            if let Some(pm) = self.envs.get(&tid) {
+                found = true;
+                atlas = pm.atlas;
+                uv = vec![pm.lod_max as f64, 1.0 / (pm.aw as f64), 1.0 / (pm.ah as f64), 0.0];
+            }
+            if !found {
+                return 0;
+            }
+            c.bind(11, atlas, false);
+            let intensity = if e.scene { self.scene_env_intensity } else { m.env_map_intensity };
+            env = vec![1.0, intensity, 0.0, 0.0];
+            mode = 1;
+        } else {
+            if !self.texture(c, &e.tex, 11) {
+                return 0;
+            }
+            let refract = if e.tex.borrow().mapping == EQUIRECTANGULAR_REFRACTION_MAPPING { m.refraction_ratio } else { 0.0 };
+            uv = vec![0.0, 0.0, 0.0, refract];
+            env = vec![2.0, 1.0, m.combine as f64, m.reflectivity];
+            mode = 2;
+        }
+        // three.js passes the inverse (transpose) of the rotation
+        let rot = if e.scene { self.scene_env_rotation } else { m.env_map_rotation };
+        let mut vals: Vec<f64> = uv;
+        for v in env.iter() {
+            vals.push(*v);
+        }
+        for v in euler_mat3(&rot, true).iter() {
+            vals.push(*v);
+        }
+        self.env_vals = vals;
+        mode
+    }
+
+    /// The uniforms of the environment `env_bind` bound (after the program is in use).
+    fn env_uniforms(&self, c: &mut GpuCommands, mode: i64) {
+        if mode == 0 {
+            c.uniform(self.loc("u_env"), U_VEC4, &vec![0.0, 0.0, 0.0, 0.0]);
+            return;
+        }
+        let v = &self.env_vals;
+        c.uniform(self.loc("u_envUV"), U_VEC4, &vec![v[0], v[1], v[2], v[3]]);
+        c.uniform(self.loc("u_env"), U_VEC4, &vec![v[4], v[5], v[6], v[7]]);
+        let mut r: Vec<f64> = Vec::new();
+        for i in 8..17 {
+            r.push(v[i]);
+        }
+        c.uniform(self.loc("u_envRot"), U_MAT3, &r);
     }
 
     /// Binds texture `t` to `unit`, uploading it when its pixels or
@@ -556,6 +1006,7 @@ impl GpuRenderer {
         true
     }
 
+    /// The samplers' texture units (as three-webgl.js setUnits).
     fn set_units(&self, c: &mut GpuCommands) {
         let units: Vec<String> = vec![
             String::from("u_map"),
@@ -617,13 +1068,23 @@ impl GpuRenderer {
         self.frame += 1;
         let plan = plan_frame(scene, camera, &s.clear_color, s.clear_alpha);
         let mut override_mat: Option<MaterialRef> = None;
+        let mut bg_tex: Option<TextureRef> = None;
+        let mut bg_blur: f64 = 0.0;
+        let mut bg_intensity: f64 = 1.0;
+        let mut bg_rotation = Euler::new(0.0, 0.0, 0.0, EulerOrder::Xyz);
+        self.scene_env = None;
         if let ObjectKind::Scene(sd) = &scene.borrow().kind {
-            if let Background::Texture(_) = &sd.background {
-                missing.push(String::from("background texture"));
+            if let Background::Texture(t) = &sd.background {
+                bg_tex = Some(t.clone());
             }
-            if sd.environment.is_some() {
-                missing.push(String::from("scene environment"));
+            bg_blur = sd.background_blurriness;
+            bg_intensity = sd.background_intensity;
+            bg_rotation = sd.background_rotation;
+            if let Some(t) = &sd.environment {
+                self.scene_env = Some(t.clone());
             }
+            self.scene_env_intensity = sd.environment_intensity;
+            self.scene_env_rotation = sd.environment_rotation;
             if let Some(m) = &sd.override_material {
                 override_mat = Some(m.clone());
             }
@@ -632,6 +1093,7 @@ impl GpuRenderer {
             missing.push(String::from("shadow maps"));
         }
         self.ensure_fixed(&mut c);
+        self.prepare_envs(&mut c, &plan.items, s.half_float);
         let w = s.width;
         let h = s.height;
         let cl = plan.clear;
@@ -647,6 +1109,9 @@ impl GpuRenderer {
         c.bind(13, self.shadow_flat, false);
         c.bind(15, self.shadow_cube, true);
         c.bind(2, self.dfg, false);
+        if let Some(t) = &bg_tex {
+            self.background(&mut c, t, bg_blur, bg_intensity, &bg_rotation, &plan.view, &plan.projection, s);
+        }
         // the frame's uniforms
         let mut ff: Vec<f64> = elements(&plan.view);
         let mut inv = plan.view;
@@ -784,10 +1249,6 @@ impl GpuRenderer {
         let o = item.object.borrow();
         let kind = item.kind;
         let mesh = kind == 1 || kind == 2;
-        if m.env_map.is_some() {
-            frame.missing.push(String::from("environment map"));
-            return;
-        }
         let dashed = m.kind == MaterialKind::LineDashed;
         let sprite = kind == 7;
         if !data.morph_target_influences.is_empty() {
@@ -932,6 +1393,7 @@ impl GpuRenderer {
                 }
             }
         }
+        let env_mode = self.env_bind(c, &m);
         let points_uv = if kind == 6 && !has_uv { 1 } else { 0 };
         let opaque = !m.transparent && m.blending == Blending::Normal;
         let physical = if mu[22] > 0.5 { 1 } else { 0 };
@@ -963,7 +1425,7 @@ impl GpuRenderer {
             0,
             if mu[19] > 0.5 { self.fog_kind } else { 0 },
             0,
-            0,
+            env_mode,
         ];
         for k in 0..6 {
             vals.push(if lit { self.light_counts[k] } else { 0 });
@@ -974,7 +1436,7 @@ impl GpuRenderer {
         }
         self.use_main(c, &vals);
         c.uniform(self.loc("u_mat"), U_VEC4, &mu);
-        c.uniform(self.loc("u_env"), U_VEC4, &vec![0.0, 0.0, 0.0, 0.0]);
+        self.env_uniforms(c, env_mode);
         c.uniform(self.loc("u_model"), U_MAT4, &elements(&o.matrix_world));
         c.uniform(self.loc("u_normalMat"), U_MAT3, &normal_matrix(&o.matrix_world.elements));
         c.uniform(self.loc("u_uvt"), U_MAT3, &map_transform(&m));

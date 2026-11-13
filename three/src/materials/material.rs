@@ -7,6 +7,7 @@ use ranger::prelude::*;
 use std::rc::Rc;
 
 use crate::maths::color::Color;
+use crate::maths::euler::{Euler, EulerOrder};
 use crate::maths::math_utils::INFINITY;
 use crate::maths::vector2::Vector2;
 use crate::textures::texture::TextureRef;
@@ -144,6 +145,7 @@ pub struct Material {
     pub specular_map: Option<TextureRef>,
     pub env_map: Option<TextureRef>,
     pub env_map_intensity: f64,
+    pub env_map_rotation: Euler,
     pub reflectivity: f64,
     pub refraction_ratio: f64,
     pub combine: i64,
@@ -239,6 +241,7 @@ impl Material {
             specular_map: None,
             env_map: None,
             env_map_intensity: 1.0,
+            env_map_rotation: Euler::new(0.0, 0.0, 0.0, EulerOrder::Xyz),
             reflectivity: 1.0,
             refraction_ratio: 0.98,
             combine: 0,

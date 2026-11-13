@@ -283,6 +283,8 @@ pub struct SceneData {
     pub background_intensity: f64,
     pub environment: Option<TextureRef>,
     pub environment_intensity: f64,
+    pub background_rotation: Euler,
+    pub environment_rotation: Euler,
     pub fog: Option<Fog>,
     pub override_material: Option<MaterialRef>,
 }
@@ -295,6 +297,8 @@ impl SceneData {
             background_intensity: 1.0,
             environment: None,
             environment_intensity: 1.0,
+            background_rotation: Euler::new(0.0, 0.0, 0.0, EulerOrder::Xyz),
+            environment_rotation: Euler::new(0.0, 0.0, 0.0, EulerOrder::Xyz),
             fog: None,
             override_material: None,
         }

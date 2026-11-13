@@ -366,6 +366,9 @@ vec2 equirectUv(vec3 d) { return vec2(atan(d.z, d.x) * 0.1591549431 + 0.5, asin(
 pub fn main_fragment_template() -> String {
     let mut s = String::new();
     s.push_str(r#"precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp samplerCube;
 in vec3 v_world; in vec3 v_normal; in vec2 v_uv; in vec2 v_uv0; in vec3 v_color; in float v_depth; in float v_lineDist;
 uniform int u_dashed;
 uniform float u_dashSize, u_dashTotal, u_bumpScale;
@@ -750,6 +753,9 @@ pub fn pmrem_fs() -> String {
     let mut s = String::new();
     s.push_str(r#"#version 300 es
 precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp samplerCube;
 uniform sampler2D u_src;
 uniform int u_pass;
 uniform float u_size, u_sizeIn, u_rough;
@@ -791,6 +797,9 @@ pub fn background_fs() -> String {
     let mut s = String::new();
     s.push_str(r#"#version 300 es
 precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp samplerCube;
 uniform int u_mode, u_tone, u_linearOut;
 uniform float u_exposure, u_intensity, u_lod, u_mipF, u_sizeA, u_sizeB;
 uniform sampler2D u_tex, u_lvA, u_lvB;
@@ -825,6 +834,9 @@ out vec4 o_color;
 pub fn vsm_blur_fs() -> String {
     String::from(r#"#version 300 es
 precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp samplerCube;
 uniform sampler2D u_src;
 uniform vec2 u_res;
 uniform float u_radius, u_samples;

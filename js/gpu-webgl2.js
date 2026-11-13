@@ -187,7 +187,46 @@
             if (r.tex) gl.deleteTexture(r.tex);
             if (r.prog) gl.deleteProgram(r.prog);
             if (r.fb) gl.deleteFramebuffer(r.fb);
+            if (r.rbs) for (var rb = 0; rb < r.rbs.length; rb++) gl.deleteRenderbuffer(r.rbs[rb]);
+            delete obj[ints[i - 1]];
           }
+          break;
+        }
+        case 12: { // TARGET id, w, h, samples, colour kind, colour, depth kind, depth
+          var gid = ints[i], gw = ints[i + 1], gh = ints[i + 2], samples = ints[i + 3];
+          i += 8;
+          var old = obj[gid];
+          if (old) { gl.deleteFramebuffer(old.fb); for (var ob = 0; ob < old.rbs.length; ob++) gl.deleteRenderbuffer(old.rbs[ob]); }
+          var tg = { fb: gl.createFramebuffer(), rbs: [] };
+          gl.bindFramebuffer(gl.FRAMEBUFFER, tg.fb);
+          for (var at = 0; at < 2; at++) {
+            var ak = ints[i - 4 + at * 2], av = ints[i - 3 + at * 2];
+            var depthAt = av === gl.DEPTH24_STENCIL8 || av === gl.DEPTH32F_STENCIL8 ? gl.DEPTH_STENCIL_ATTACHMENT : gl.DEPTH_ATTACHMENT;
+            var point = at === 0 ? gl.COLOR_ATTACHMENT0 : depthAt;
+            if (ak === 1) {
+              if (at === 1) point = gl.DEPTH_ATTACHMENT;
+              gl.framebufferTexture2D(gl.FRAMEBUFFER, point, gl.TEXTURE_2D, obj[av].tex, 0);
+            } else if (ak === 2) {
+              var rbo = gl.createRenderbuffer();
+              gl.bindRenderbuffer(gl.RENDERBUFFER, rbo);
+              if (samples > 0) gl.renderbufferStorageMultisample(gl.RENDERBUFFER, samples, av, gw, gh);
+              else gl.renderbufferStorage(gl.RENDERBUFFER, av, gw, gh);
+              gl.framebufferRenderbuffer(gl.FRAMEBUFFER, point, gl.RENDERBUFFER, rbo);
+              tg.rbs.push(rbo);
+            }
+          }
+          if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error("gpu-webgl2: target " + gid + " is incomplete");
+          gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+          obj[gid] = tg;
+          break;
+        }
+        case 13: { // COPY source, destination, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter
+          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, ints[i] ? obj[ints[i]].fb : null);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, ints[i + 1] ? obj[ints[i + 1]].fb : null);
+          gl.blitFramebuffer(ints[i + 2], ints[i + 3], ints[i + 4], ints[i + 5], ints[i + 6], ints[i + 7], ints[i + 8], ints[i + 9], ints[i + 10], ints[i + 11]);
+          gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+          gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+          i += 12;
           break;
         }
         default:
