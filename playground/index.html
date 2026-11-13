@@ -35,7 +35,7 @@
       <label for="example">Example</label>
       <select id="example"></select>
       <label for="backend">Renderer</label>
-      <select id="backend"><option value="gpu">GPU (WebGL2)</option><option value="software">Software</option></select>
+      <select id="backend"><option value="commands">GPU commands (crate)</option><option value="gpu">GPU (WebGL2)</option><option value="software">Software</option></select>
       <button class="run" id="run">Run (Ctrl+Enter)</button>
     </div>
     <textarea id="code" spellcheck="false" aria-label="Code"></textarea>
@@ -51,6 +51,7 @@
 <script src="three-curves.js"></script>
 <script src="three-renderer.js"></script>
 <script src="three-webgl.js"></script>
+<script src="gpu-webgl2.js"></script>
 <script src="examples.js"></script>
 <script>
 (function () {
@@ -93,7 +94,7 @@
     var fresh = canvas.cloneNode(false);
     canvas.parentNode.replaceChild(fresh, canvas);
     canvas = fresh;
-    var renderer = new THREE.WebGLRenderer({ canvas: canvas, software: backendSel.value === "software" });
+    var renderer = new THREE.WebGLRenderer({ canvas: canvas, software: backendSel.value === "software", commands: backendSel.value === "commands" });
     renderer.setSize(canvas.clientWidth || 640, Math.round((canvas.clientWidth || 640) * 0.75), false);
     current = renderer;
     var frames = 0, t0 = performance.now(), shown = false;
@@ -103,7 +104,7 @@
       var dt = performance.now() - t0;
       var info = renderer.info.render;
       var what = info.triangles + " triangles" + (info.lines ? ", " + info.lines + " lines" : "") + (info.points ? ", " + info.points + " points" : "");
-      what += " (" + (renderer.backend === "webgl2" ? "GPU" : "software") + ")";
+      what += " (" + (renderer.backend === "commands" ? "GPU commands" : renderer.backend === "webgl2" ? "GPU" : "software") + ")";
       if (dt > 1000) { status.textContent = (frames * 1000 / dt).toFixed(1) + " fps, " + what; frames = 0; t0 = performance.now(); shown = true; }
       else if (!shown) status.textContent = what;
     };
