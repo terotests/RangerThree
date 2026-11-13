@@ -45,3 +45,14 @@ the same scenes, in the page's V8 and in CErXes over the same bridge.
 Headless Chromium (SwiftShader). Results: `bench/gl-results.json`.
 `cerxes-gl/` links CErXes, so its Rust crate is AGPL-3.0-or-later like
 CErXes; the JavaScript is MIT.
+
+## Cold start (`bench/cold-start.mjs`)
+
+The first frame of every playground example in a fresh page, with the
+programs it links, their source size and the time spent in compile and
+link calls; RangerThree's backend and three.js r185 side by side.
+
+    bash scripts/build-js.sh && node bench/cold-start.mjs
+
+SwiftShader compiles on the CPU, so the times are not a GPU's; program
+counts and source sizes are.

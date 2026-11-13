@@ -202,6 +202,8 @@
     this._soft.clear(this._soft.clear_color, this._soft.clear_alpha); this._present();
   };
   P.compile = function () {};
+  // after code that used the WebGL context directly: forget the cached GL state
+  P.resetState = function () { if (this._gpu) this._gpu.resetState(); };
   P.dispose = function () { this._loop = null; if (this._gpu) this._gpu.dispose(); };
   P.forceContextLoss = function () {};
   // ---- loaders -----------------------------------------------------------

@@ -33,15 +33,126 @@
   var FILTERS = { 1003: 9728, 1004: 9984, 1005: 9986, 1006: 9729, 1007: 9985, 1008: 9987 };
   var WRAPS = { 1000: 10497, 1001: 33071, 1002: 33648 };
 
+  // no status query here: a query waits for the driver, so the compile and
+  // link of every program a frame needs are issued first (startProgram) and
+  // checked when the program is first used (finishProgram); with
+  // KHR_parallel_shader_compile the driver compiles them side by side
   function compile(gl, type, src) {
     var s = gl.createShader(type);
     gl.shaderSource(s, src);
     gl.compileShader(s);
-    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error("WebGL2 shader: " + gl.getShaderInfoLog(s));
     return s;
   }
 
   var NAMES = S.uniform_names();
+
+  // GL state and uniform values, cached: a call that sets what is already
+  // set is skipped. The setters are shadowed on the context object itself, so
+  // every path of the backend goes through the cache and it never goes stale;
+  // code that touches the context directly calls renderer.resetState() after.
+  // Uniform values are kept per location (each location belongs to one
+  // program), vertex attribute arrays per vertex array object, as in GL.
+  function cacheState(gl) {
+    var raw = {}, st;
+    function reset() {
+      st = { caps: {}, unit: -1, tex: {}, buf: {}, prog: undefined, vao: undefined, vaos: new Map(), gen: [], misc: {}, uni: new WeakMap() };
+    }
+    reset();
+    function wrap(name, fn) { raw[name] = gl[name]; gl[name] = fn; }
+    function same(a, b) {
+      if (a === undefined || a.length !== b.length) return false;
+      for (var i = 0; i < b.length; i++) if (a[i] !== b[i]) return false;
+      return true;
+    }
+    function vaoState() {
+      var v = st.vaos.get(st.vao);
+      if (!v) { v = { on: [], ptr: [], div: [], elem: undefined }; st.vaos.set(st.vao, v); }
+      return v;
+    }
+    wrap("enable", function (c) { if (st.caps[c] !== true) { st.caps[c] = true; raw.enable.call(gl, c); } });
+    wrap("disable", function (c) { if (st.caps[c] !== false) { st.caps[c] = false; raw.disable.call(gl, c); } });
+    // calls with plain arguments whose last values are kept under one key
+    function keyed(name, key) {
+      wrap(name, function () {
+        var a = Array.prototype.slice.call(arguments);
+        if (same(st.misc[key], a)) return;
+        st.misc[key] = a;
+        if (key === "blendEq" || key === "blendFn") st.misc[key === "blendEq" ? "blendEquationSeparate" : "blendFuncSeparate"] = undefined;
+        raw[name].apply(gl, a);
+      });
+    }
+    keyed("depthMask", "depthMask"); keyed("depthFunc", "depthFunc"); keyed("frontFace", "frontFace"); keyed("cullFace", "cullFace");
+    keyed("colorMask", "colorMask"); keyed("blendColor", "blendColor"); keyed("polygonOffset", "polygonOffset");
+    // the one-value and separate forms of the blend calls set the same state
+    wrap("blendEquation", function (m) { gl.blendEquationSeparate(m, m); });
+    wrap("blendFunc", function (a, b) { gl.blendFuncSeparate(a, b, a, b); });
+    keyed("blendEquationSeparate", "blendEquationSeparate"); keyed("blendFuncSeparate", "blendFuncSeparate");
+    wrap("activeTexture", function (u) { if (st.unit !== u) { st.unit = u; raw.activeTexture.call(gl, u); } });
+    wrap("bindTexture", function (t, x) {
+      var k = st.unit + ":" + t;
+      if (st.tex[k] === x && x !== undefined) return;
+      st.tex[k] = x; raw.bindTexture.call(gl, t, x);
+    });
+    wrap("deleteTexture", function (x) { for (var k in st.tex) if (st.tex[k] === x) st.tex[k] = undefined; raw.deleteTexture.call(gl, x); });
+    wrap("bindBuffer", function (t, x) {
+      // the element array binding is vertex array state
+      if (t === 34963) { var v = vaoState(); if (v.elem === x) return; v.elem = x; }
+      else { if (st.buf[t] === x && x !== undefined) return; st.buf[t] = x; }
+      raw.bindBuffer.call(gl, t, x);
+    });
+    wrap("deleteBuffer", function (x) {
+      for (var k in st.buf) if (st.buf[k] === x) st.buf[k] = undefined;
+      st.vaos.forEach(function (v) { if (v.elem === x) v.elem = undefined; for (var i = 0; i < v.ptr.length; i++) if (v.ptr[i] && v.ptr[i][0] === x) v.ptr[i] = undefined; });
+      raw.deleteBuffer.call(gl, x);
+    });
+    wrap("bindVertexArray", function (x) { if (st.vao === x) return; st.vao = x; raw.bindVertexArray.call(gl, x); });
+    wrap("deleteVertexArray", function (x) { st.vaos.delete(x); if (st.vao === x) st.vao = undefined; raw.deleteVertexArray.call(gl, x); });
+    wrap("enableVertexAttribArray", function (i) { var v = vaoState(); if (v.on[i] !== true) { v.on[i] = true; raw.enableVertexAttribArray.call(gl, i); } });
+    wrap("disableVertexAttribArray", function (i) { var v = vaoState(); if (v.on[i] !== false) { v.on[i] = false; raw.disableVertexAttribArray.call(gl, i); } });
+    wrap("vertexAttribPointer", function (i, size, type, norm, stride, off) {
+      var v = vaoState(), a = [st.buf[34962], size, type, norm, stride, off];
+      if (a[0] !== undefined && same(v.ptr[i], a)) return;
+      v.ptr[i] = a; raw.vertexAttribPointer.call(gl, i, size, type, norm, stride, off);
+    });
+    wrap("vertexAttribIPointer", function (i, size, type, stride, off) { vaoState().ptr[i] = undefined; raw.vertexAttribIPointer.call(gl, i, size, type, stride, off); });
+    wrap("vertexAttribDivisor", function (i, d) { var v = vaoState(); if (v.div[i] !== d) { v.div[i] = d; raw.vertexAttribDivisor.call(gl, i, d); } });
+    // generic (constant) attribute values are context state
+    wrap("vertexAttrib4f", function (i, x, y, z, w) {
+      var a = [x, y, z, w];
+      if (same(st.gen[i], a)) return;
+      st.gen[i] = a; raw.vertexAttrib4f.call(gl, i, x, y, z, w);
+    });
+    wrap("vertexAttrib4fv", function (i, a) { st.gen[i] = undefined; raw.vertexAttrib4fv.call(gl, i, a); });
+    wrap("useProgram", function (p) { if (st.prog === p && p !== undefined) return; st.prog = p; raw.useProgram.call(gl, p); });
+    wrap("deleteProgram", function (p) { if (st.prog === p) st.prog = undefined; raw.deleteProgram.call(gl, p); });
+    // uniforms: scalars and vectors by value, arrays and matrices compared element by element
+    ["uniform1f", "uniform2f", "uniform3f", "uniform4f", "uniform1i", "uniform2i", "uniform3i", "uniform4i"].forEach(function (name) {
+      wrap(name, function (loc) {
+        if (loc == null) return;
+        var a = Array.prototype.slice.call(arguments, 1);
+        if (same(st.uni.get(loc), a)) return;
+        st.uni.set(loc, a); raw[name].apply(gl, arguments);
+      });
+    });
+    ["uniform1fv", "uniform2fv", "uniform3fv", "uniform4fv", "uniform1iv", "uniform2iv", "uniform3iv", "uniform4iv"].forEach(function (name) {
+      wrap(name, function (loc, v) {
+        if (loc == null) return;
+        if (arguments.length > 2) { st.uni.delete(loc); raw[name].apply(gl, arguments); return; }
+        if (same(st.uni.get(loc), v)) return;
+        st.uni.set(loc, Array.prototype.slice.call(v)); raw[name].call(gl, loc, v);
+      });
+    });
+    ["uniformMatrix3fv", "uniformMatrix4fv"].forEach(function (name) {
+      wrap(name, function (loc, tr, v) {
+        if (loc == null) return;
+        if (arguments.length > 3) { st.uni.delete(loc); raw[name].apply(gl, arguments); return; }
+        var c = st.uni.get(loc);
+        if (c && c.tr === tr && same(c.v, v)) return;
+        st.uni.set(loc, { tr: tr, v: Array.prototype.slice.call(v) }); raw[name].call(gl, loc, tr, v);
+      });
+    });
+    return reset;
+  }
 
   // the inverse transpose of a 4x4 matrix's upper 3x3 (column-major), into out
   function normalMatrix(e, out) {
@@ -57,7 +168,10 @@
   function Backend(gl, renderer) {
     this.gl = gl;
     this.renderer = renderer;
+    this.resetState = cacheState(gl);
     this.mains = {};
+    gl.getExtension("KHR_parallel_shader_compile");
+    this.seenDraws = new WeakMap(); // object -> material key it was last drawn with (prepass)
     this.frame = {};
     this.fver = 0;
     this.cur = null;
@@ -108,9 +222,14 @@
     if (!vals) { vals = []; for (var i = 0; i < SPEC_KEYS.length; i++) vals.push(0); }
     var key = type + ":" + vals.join(","), m = this.mains[key], gl = this.gl;
     if (!m) {
-      m = this.mains[key] = program(gl, S.main_vertex(vals), S.main_fragment(type, vals), NAMES);
+      m = this.mains[key] = startProgram(gl, S.main_vertex(vals), S.main_fragment(type, vals), NAMES);
       m.seen = 0;
       this.programCount = (this.programCount || 0) + 1;
+    }
+    // the prepass only starts the compiles
+    if (this.prepass) return false;
+    if (!m.u) {
+      finishProgram(gl, m);
       gl.useProgram(m.prog);
       this.setUnits(m.u);
       this.cur = null;
@@ -126,6 +245,7 @@
       }
       m.seen = this.fver;
     }
+    return true;
   };
 
   // a uniform every variant shares for the whole frame (or pass): recorded,
@@ -219,12 +339,18 @@
       e.version = tex.version; e.srgb = srgb;
     }
     gl.bindTexture(gl.TEXTURE_2D, e.tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, WRAPS[tex.wrap_s] || gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, WRAPS[tex.wrap_t] || gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, tex.mag_filter === 1003 ? gl.NEAREST : gl.LINEAR);
+    // sampling parameters are texture object state: set when they change
+    var ws = WRAPS[tex.wrap_s] || gl.CLAMP_TO_EDGE, wt = WRAPS[tex.wrap_t] || gl.CLAMP_TO_EDGE, mag = tex.mag_filter === 1003 ? gl.NEAREST : gl.LINEAR;
     var min = FILTERS[tex.min_filter] || gl.LINEAR;
     if (!e.mip) min = (min === 9728 || min === 9984 || min === 9986) ? gl.NEAREST : gl.LINEAR;
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, min);
+    var params = ws + "," + wt + "," + mag + "," + min;
+    if (e.params !== params) {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, ws);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, wt);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, mag);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, min);
+      e.params = params;
+    }
     return e.tex;
   };
 
@@ -234,16 +360,28 @@
   // backgrounds and, later, environment lighting match it). A level is a
   // 3 x 2 atlas of cube faces, each `size` texels with a one-texel border.
 
-  function program(gl, vs, fs, names) {
-    var prog = gl.createProgram();
-    gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, vs));
-    gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, fs));
+  function startProgram(gl, vs, fs, names) {
+    var prog = gl.createProgram(), v = compile(gl, gl.VERTEX_SHADER, vs), f = compile(gl, gl.FRAGMENT_SHADER, fs);
+    gl.attachShader(prog, v);
+    gl.attachShader(prog, f);
     gl.linkProgram(prog);
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error("WebGL2 program: " + gl.getProgramInfoLog(prog));
-    var u = {};
-    for (var i = 0; i < names.length; i++) u[names[i]] = gl.getUniformLocation(prog, names[i]);
-    return { prog: prog, u: u };
+    return { prog: prog, u: null, names: names, vs: v, fs: f };
   }
+  function finishProgram(gl, p) {
+    if (p.u) return p;
+    if (!gl.getProgramParameter(p.prog, gl.LINK_STATUS)) {
+      var log = gl.getProgramInfoLog(p.prog);
+      if (!gl.getShaderParameter(p.vs, gl.COMPILE_STATUS)) log = gl.getShaderInfoLog(p.vs);
+      else if (!gl.getShaderParameter(p.fs, gl.COMPILE_STATUS)) log = gl.getShaderInfoLog(p.fs);
+      throw new Error("WebGL2 program: " + log);
+    }
+    gl.deleteShader(p.vs); gl.deleteShader(p.fs); p.vs = p.fs = null;
+    var u = {};
+    for (var i = 0; i < p.names.length; i++) u[p.names[i]] = gl.getUniformLocation(p.prog, p.names[i]);
+    p.u = u;
+    return p;
+  }
+  function program(gl, vs, fs, names) { return finishProgram(gl, startProgram(gl, vs, fs, names)); }
 
   // the roughness -> level mapping of the prefiltered environment (three.js's roughnessToMip)
   function roughnessToMip(r) {
@@ -513,9 +651,8 @@
     if (!this.shDummy) this.shDummy = { flat: depthTexture(gl, false, 1, 1, 1, 1), cube: depthTexture(gl, true, 1, 1, 1, 1) };
     for (var i = 0; i < 4; i++) {
       gl.activeTexture(gl.TEXTURE0 + SHADOW_UNITS[i]);
-      gl.bindTexture(gl.TEXTURE_2D, null);
-      gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
-      if (type !== 3) gl.bindTexture(i === 3 ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_2D, i === 3 ? this.shDummy.cube : this.shDummy.flat);
+      gl.bindTexture(gl.TEXTURE_2D, type !== 3 && i !== 3 ? this.shDummy.flat : null);
+      gl.bindTexture(gl.TEXTURE_CUBE_MAP, type !== 3 && i === 3 ? this.shDummy.cube : null);
     }
     gl.activeTexture(gl.TEXTURE0);
   };
@@ -708,7 +845,8 @@
     // the frame's variant flags: rect area lights, shadow slots, fog kind
     this.hasRect = this.lightCounts[5] ? 1 : 0;
     this.hasShadows = 0;
-    for (var si in slots) if (si < n) this.hasShadows = 1;
+    this.shSlots = 0;
+    for (var si in slots) if (si < n) { this.hasShadows = 1; this.shSlots |= 1 << slots[si]; }
     this.fogKind = plan.fog[0] > 1.5 ? 2 : plan.fog[0] > 0.5 ? 1 : 0;
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.dfg);
@@ -729,6 +867,22 @@
     this.transTex = null;
     if (transmissive.length && !override) this.transmissionPass(scene, plan, opaque, transmissive, w, h);
     var lists = [opaque, transmissive, transparent];
+    // a frame that may need programs not compiled yet starts all their
+    // compiles before the first draw waits for one (see startProgram)
+    var sig = [this.stype, this.tone, this.outLinear, this.hasRect, this.shSlots, this.fogKind, this.lightCounts.join("")].join(",");
+    var fresh = sig !== this.lastSig;
+    this.lastSig = sig;
+    for (var pl = 0; pl < 3; pl++) for (var pk = 0; pk < lists[pl].length; pk++) {
+      var po = lists[pl][pk].object, pm = override || po.material;
+      var mk = Array.isArray(pm) ? pm.map(function (x) { return x ? x.id + "." + x.version : ""; }).join(",") : pm ? pm.id + "." + pm.version : "";
+      if (this.seenDraws.get(po) !== mk) { this.seenDraws.set(po, mk); fresh = true; }
+    }
+    if (fresh) {
+      this.prepass = true;
+      for (var pl2 = 0; pl2 < 3; pl2++) for (var pk2 = 0; pk2 < lists[pl2].length; pk2++) this.draw(lists[pl2][pk2], info, override);
+      this.prepass = false;
+      this.cur = null;
+    }
     for (var li = 0; li < 3; li++) for (var k2 = 0; k2 < lists[li].length; k2++) this.draw(lists[li][k2], info, override);
     gl.disable(gl.POLYGON_OFFSET_FILL);
     gl.colorMask(true, true, true, true);
@@ -896,11 +1050,12 @@
     var receive = o.receiveShadow && this.hasShadows ? 1 : 0;
     // the program variant, in SPEC_KEYS order; a shadow caster keeps only what decides its discards
     var sp = this.shadowPass ? 1 : 0;
-    this.useMain(this.stype, sp ? [glTex ? 1 : 0, pointsUv, 0, opaque ? 1 : 0, 0, bits & 1, 0, 0, 0, dashed ? 1 : 0, 0, instances > 0 ? 1 : 0, glD ? 1 : 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0] : [
+    var ok = this.useMain(this.stype, sp ? [glTex ? 1 : 0, pointsUv, 0, opaque ? 1 : 0, 0, bits & 1, 0, 0, 0, dashed ? 1 : 0, 0, instances > 0 ? 1 : 0, glD ? 1 : 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0] : [
       glTex ? 1 : 0, pointsUv, hasNormal ? 1 : 0, opaque ? 1 : 0, material.toneMapped === false ? 0 : this.tone, bits, this.outLinear,
       material.premultipliedAlpha ? 1 : 0, glE ? 1 : 0, dashed ? 1 : 0, receive, instances > 0 ? 1 : 0, glD ? 1 : 0, sprite ? 1 : 0,
       mu[15] | 0, mu[13] > 0.5 ? 1 : 0, mu[14] > 0.5 ? 1 : 0, physical, mu[17] > 0.5 ? 1 : 0,
-      physical && sheen > 0 && shc ? 1 : 0, physical && tr > 0 ? 1 : 0, this.hasRect, mu[19] > 0.5 ? this.fogKind : 0, 0, env ? env.mode : 0].concat(mu[13] > 0.5 ? this.lightCounts : [0, 0, 0, 0, 0, 0]));
+      physical && sheen > 0 && shc ? 1 : 0, physical && tr > 0 ? 1 : 0, this.hasRect, mu[19] > 0.5 ? this.fogKind : 0, 0, env ? env.mode : 0, receive ? this.shSlots : 0].concat(mu[13] > 0.5 ? this.lightCounts : [0, 0, 0, 0, 0, 0]));
+    if (!ok) return;
     var u = this.u;
     gl.uniform4fv(u.u_mat, mu);
     this.envUniforms(env);

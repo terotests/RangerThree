@@ -284,6 +284,8 @@ pub struct GpuRenderer {
     stype: i64,
     shadow_pass: i64,
     has_shadows: bool,
+    /// bit per shadow slot this frame fills (the key's K_SHSLOTS)
+    sh_slots: i64,
     /// per slot; depth 0: not made yet
     shadow_res: Vec<ShadowRes>,
     /// u_shMat, u_shParam, u_shSize (empty until a frame had shadows)
@@ -503,6 +505,7 @@ impl GpuRenderer {
             stype: 1,
             shadow_pass: 0,
             has_shadows: false,
+            sh_slots: 0,
             shadow_res: vec![no_shadow_res(), no_shadow_res(), no_shadow_res(), no_shadow_res()],
             shadow_mat: Vec::new(),
             shadow_param: Vec::new(),
@@ -1653,9 +1656,11 @@ impl GpuRenderer {
         self.lights = lights;
         self.light_counts = counts;
         self.has_shadows = false;
+        self.sh_slots = 0;
         for i in 0..(n as usize) {
             if slots[i] >= 0 {
                 self.has_shadows = true;
+                self.sh_slots = self.sh_slots | (1 << slots[i]);
             }
         }
         self.frame_ints = vec![n];
@@ -2243,6 +2248,7 @@ impl GpuRenderer {
             if mu[19] > 0.5 { self.fog_kind } else { 0 },
             0,
             env_mode,
+            0,
         ];
         vals[21] = if self.light_counts[5] > 0 { 1 } else { 0 };
         vals[20] = if physical == 1 && trans > 0.0 { 1 } else { 0 };
@@ -2261,6 +2267,7 @@ impl GpuRenderer {
             vals = v2;
         } else {
             vals[10] = if o.receive_shadow && self.has_shadows { 1 } else { 0 };
+            vals[25] = if vals[10] == 1 { self.sh_slots } else { 0 };
         }
         if shader {
             if !self.use_shader(c, frame, &m, &o.matrix_world, instances > 0, colored, data) {
